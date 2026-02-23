@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./lib/supabase";
+import { generateClientPDF, generateConsolidatedPDF } from "./lib/pdfReport";
 import t from "./i18n";
 import { PHASE_COLORS, PRIORITY_COLORS, STATUS_COLORS } from "./data";
 
@@ -201,6 +202,187 @@ function ClientListView({ profile, tr, onSelectClient, lang, setLang }) {
   );
 }
 
+// ── Consolidated Report Button (Admin) ───────────────────────────────────────
+function ConsolidatedReportButton({ clients, assignments }) {
+  const [loading, setLoading] = useState(false);
+
+  const generate = async () => {
+    setLoading(true);
+    try {
+      const clientsData = await Promise.all(clients.map(async (client) => {
+        const [{ data:checklist },{ data:tasks },{ data:resources },{ data:serviceRequests }] = await Promise.all([
+          supabase.from("client_checklist").select("*").eq("client_id", client.id).order("sort_order").order("created_at"),
+          supabase.from("client_tasks").select("*").eq("client_id", client.id),
+          supabase.from("client_resources").select("*").eq("client_id", client.id),
+          supabase.from("client_service_requests").select("*").eq("client_id", client.id),
+        ]);
+        const consultants = assignments.filter(a => a.client_id === client.id && a.active);
+        return { client, consultants, checklist:checklist||[], tasks:tasks||[], resources:resources||[], serviceRequests:serviceRequests||[] };
+      }));
+
+      // Build consolidated PDF manually
+      const { jsPDF } = await import("jspdf");
+      const doc = new jsPDF({ orientation:"portrait", unit:"mm", format:"a4" });
+      const W=210, M=18, CW=W-M*2;
+
+      // Cover page
+      doc.setFillColor(37,99,235); doc.rect(0,0,W,50,"F");
+      doc.setTextColor(255,255,255);
+      doc.setFontSize(22); doc.setFont("helvetica","bold"); doc.text("Joule × Ariba",M,22);
+      doc.setFontSize(12); doc.setFont("helvetica","normal"); doc.text("Reporte Consolidado de Activación",M,32);
+      doc.setFontSize(9); doc.text(new Date().toLocaleDateString("es-MX",{year:"numeric",month:"long",day:"numeric"}),M,42);
+      doc.setFontSize(10); doc.setFont("helvetica","bold"); doc.text(`${clients.length} clientes`,W-M,42,{align:"right"});
+
+      let y = 60;
+      // Summary table header
+      doc.setFontSize(11); doc.setFont("helvetica","bold"); doc.setTextColor(15,23,42);
+      doc.text("Resumen de Clientes", M, y); y+=7;
+      doc.setFillColor(37,99,235); doc.rect(M,y,CW,7,"F");
+      doc.setFontSize(7.5); doc.setFont("helvetica","bold"); doc.setTextColor(255,255,255);
+      doc.text("Cliente",M+3,y+5); doc.text("Consultor",M+55,y+5); doc.text("Checklist",M+105,y+5);
+      doc.text("Tareas",M+130,y+5); doc.text("SRs",M+152,y+5); doc.text("Estado",M+165,y+5);
+      y+=8;
+
+      clientsData.forEach(({ client:c, consultants:cons, checklist, tasks, serviceRequests }, idx) => {
+        if (y>265) { doc.addPage(); y=20; }
+        const pct = checklist.length ? Math.round(checklist.filter(i=>i.done).length/checklist.length*100) : 0;
+        const doneT = tasks.filter(t=>t.status==="Completado").length;
+        const openSR = serviceRequests.filter(s=>s.status==="Abierto"||s.status==="En progreso").length;
+        const primary = cons.find(a=>a.role==="primary");
+        const statusText = pct===100?"Completo":pct>=50?"En Progreso":"Iniciando";
+        const statusCol = pct===100?[22,163,74]:pct>=50?[37,99,235]:[245,158,11];
+        if(idx%2===0){doc.setFillColor(248,250,252);doc.rect(M,y-4,CW,7,"F");}
+        doc.setFontSize(8); doc.setFont("helvetica","bold"); doc.setTextColor(15,23,42);
+        doc.text(c.name,M+3,y);
+        doc.setFont("helvetica","normal"); doc.setTextColor(100,116,139);
+        doc.text(primary?.profiles?.name||"—",M+55,y);
+        // progress bar
+        doc.setFillColor(226,232,240); doc.rect(M+105,y-3,20,2.5,"F");
+        doc.setFillColor(37,99,235); doc.rect(M+105,y-3,20*(pct/100),2.5,"F");
+        doc.setTextColor(37,99,235); doc.setFontSize(7); doc.text(`${pct}%`,M+127,y);
+        doc.setFontSize(8); doc.setTextColor(15,23,42); doc.text(`${doneT}/${tasks.length}`,M+130,y);
+        doc.setTextColor(...(openSR>0?[245,158,11]:[22,163,74])); doc.text(`${serviceRequests.length}`,M+152,y);
+        doc.setFont("helvetica","bold"); doc.setTextColor(...statusCol); doc.text(statusText,M+165,y);
+        y+=7;
+      });
+
+      // Detail section per client
+      for (const { client:c, consultants:cons, checklist, tasks, serviceRequests, resources } of clientsData) {
+        doc.addPage(); y=0;
+        // Client header
+        doc.setFillColor(37,99,235); doc.rect(0,0,W,28,"F");
+        doc.setTextColor(255,255,255); doc.setFontSize(14); doc.setFont("helvetica","bold"); doc.text(c.name,M,16);
+        doc.setFontSize(8); doc.setFont("helvetica","normal");
+        const primary=cons.find(a=>a.role==="primary");
+        if(primary) doc.text(`Consultor: ${primary.profiles?.name}`,M,23);
+        y=36;
+
+        // Mini summary
+        const pct=checklist.length?Math.round(checklist.filter(i=>i.done).length/checklist.length*100):0;
+        doc.setFontSize(8); doc.setFont("helvetica","normal"); doc.setTextColor(100,116,139);
+        doc.text(`Checklist: ${checklist.filter(i=>i.done).length}/${checklist.length} (${pct}%)  ·  Tareas completadas: ${tasks.filter(t=>t.status==="Completado").length}/${tasks.length}  ·  SRs: ${serviceRequests.length}`,M,y);
+        y+=10;
+
+        // Checklist phases
+        const sectionH = (t2) => {
+          if(y>260){doc.addPage();y=20;}
+          doc.setFillColor(37,99,235); doc.rect(M,y,CW,7,"F");
+          doc.setFontSize(9); doc.setFont("helvetica","bold"); doc.setTextColor(255,255,255); doc.text(t2,M+3,y+5); y+=10;
+        };
+        sectionH("CHECKLIST POR FASE");
+        const phases=[...new Set(checklist.map(i=>i.phase))];
+        phases.forEach(phase=>{
+          const items=checklist.filter(i=>i.phase===phase);
+          const done=items.filter(i=>i.done).length;
+          if(y>260){doc.addPage();y=20;}
+          doc.setFillColor(240,244,248); doc.rect(M,y,CW,7,"F");
+          doc.setFontSize(8); doc.setFont("helvetica","bold"); doc.setTextColor(15,23,42); doc.text(phase,M+3,y+5);
+          doc.setTextColor(37,99,235); doc.text(`${done}/${items.length}`,W-M-3,y+5,{align:"right"});
+          y+=9;
+          items.forEach(item=>{
+            if(y>268){doc.addPage();y=20;}
+            const label=item.item_es;
+            if(item.done){doc.setFillColor(22,163,74);doc.rect(M+3,y-3.5,4,4,"F");doc.setTextColor(255,255,255);doc.setFontSize(6);doc.text("✓",M+3.8,y-0.5);}
+            else{doc.setDrawColor(226,232,240);doc.rect(M+3,y-3.5,4,4,"S");}
+            doc.setFontSize(7.5); doc.setFont("helvetica","normal");
+            doc.setTextColor(item.done?100:15,item.done?116:23,item.done?139:42);
+            const lines=doc.splitTextToSize(label,CW-12); doc.text(lines,M+9,y); y+=lines.length*4.5+0.5;
+          });
+          y+=2;
+        });
+
+        // SRs
+        if(serviceRequests.length>0){
+          sectionH("SERVICE REQUESTS — ServiceNow");
+          serviceRequests.forEach((sr,idx)=>{
+            if(y>268){doc.addPage();y=20;}
+            if(idx%2===0){doc.setFillColor(248,250,252);doc.rect(M,y-4,CW,6.5,"F");}
+            doc.setFontSize(7.5); doc.setFont("helvetica","bold"); doc.setTextColor(37,99,235); doc.text(sr.sr_number||"",M+3,y);
+            doc.setFont("helvetica","normal"); doc.setTextColor(15,23,42); doc.text(doc.splitTextToSize(sr.title||"",100)[0],M+28,y);
+            doc.setTextColor(100,116,139); doc.text(sr.priority||"",M+140,y); doc.text(sr.status||"",M+160,y);
+            y+=6.5;
+          });
+          y+=3;
+        }
+
+        // Tasks
+        if(tasks.length>0){
+          sectionH("TAREAS");
+          tasks.forEach((task,idx)=>{
+            if(y>268){doc.addPage();y=20;}
+            if(idx%2===0){doc.setFillColor(248,250,252);doc.rect(M,y-4,CW,6.5,"F");}
+            doc.setFontSize(7.5); doc.setFont("helvetica","normal"); doc.setTextColor(15,23,42);
+            doc.text(doc.splitTextToSize(task.title_es||"",90)[0],M+3,y);
+            doc.setTextColor(100,116,139); doc.text(task.priority||"",M+105,y); doc.text(task.status||"",M+130,y);
+            if(task.due) doc.text(task.due,M+163,y);
+            y+=6.5;
+          });
+        }
+      }
+
+      // Page numbers
+      const total=doc.internal.getNumberOfPages();
+      for(let i=1;i<=total;i++){
+        doc.setPage(i); doc.setFillColor(226,232,240); doc.rect(0,285,W,12,"F");
+        doc.setFontSize(7); doc.setFont("helvetica","normal"); doc.setTextColor(100,116,139);
+        doc.text("Joule × Ariba — Reporte Consolidado",M,291);
+        doc.text(`${i} / ${total}`,W-M,291,{align:"right"});
+      }
+
+      doc.save(`joule-ariba-reporte-consolidado-${new Date().toISOString().slice(0,10)}.pdf`);
+    } catch(e) { alert("Error: " + e.message); }
+    setLoading(false);
+  };
+
+  return (
+    <button onClick={generate} disabled={loading} style={{ display:"inline-flex", alignItems:"center", gap:6, background:loading?"#f1f5f9":"linear-gradient(135deg,#0ea5e9,#2563eb)", border:"none", borderRadius:8, padding:"8px 16px", cursor:loading?"not-allowed":"pointer", fontSize:13, fontWeight:700, color:"#fff" }}>
+      📊 {loading?"Generando PDF...":"Reporte Consolidado PDF"}
+    </button>
+  );
+}
+
+// ── Client Progress Badge (used in Admin progress tab) ────────────────────────
+function ClientProgressBadge({ clientId }) {
+  const [pct, setPct] = useState(null);
+  useEffect(() => {
+    supabase.from("client_checklist").select("done").eq("client_id", clientId).then(({ data }) => {
+      if (!data || data.length === 0) { setPct(-1); return; }
+      setPct(Math.round((data.filter(i=>i.done).length / data.length) * 100));
+    });
+  }, [clientId]);
+  if (pct === null) return <span style={{ fontSize:12, color:"#94a3b8" }}>...</span>;
+  if (pct === -1) return <span style={{ fontSize:12, color:"#94a3b8" }}>Sin checklist</span>;
+  const color = pct === 100 ? "#16a34a" : pct >= 50 ? "#2563eb" : "#f59e0b";
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+      <div style={{ width:80, height:6, background:"#f1f5f9", borderRadius:3, overflow:"hidden" }}>
+        <div style={{ height:"100%", width:`${pct}%`, background:color, borderRadius:3 }} />
+      </div>
+      <span style={{ fontSize:12, fontWeight:700, color, fontFamily:"'DM Mono', monospace" }}>{pct}%</span>
+    </div>
+  );
+}
+
 // ── ADMIN PANEL ───────────────────────────────────────────────────────────────
 function AdminPanel({ profile, tr, onBack }) {
   const [tab, setTab] = useState("clients");
@@ -250,8 +432,41 @@ function AdminPanel({ profile, tr, onBack }) {
 
   const deleteAssignment = async (id) => { await supabase.from("client_assignments").delete().eq("id",id); load(); };
 
+  // ── Call Netlify function ──────────────────────────────────────────────────
+  const callAdminFn = async (action, data) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await fetch("/.netlify/functions/admin-users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${session.access_token}` },
+      body: JSON.stringify({ action, ...data }),
+    });
+    return res.json();
+  };
+
+  const saveConsultant = async () => {
+    if (!form.email?.trim() || !form.password?.trim() || !form.name?.trim()) { alert("Email, contraseña y nombre son requeridos"); return; }
+    setSaving(true);
+    const result = await callAdminFn("create_user", { email: form.email, password: form.password, name: form.name, role: form.role || "consultant" });
+    setSaving(false);
+    if (result.error) { alert(result.error); return; }
+    setModal(null); setForm({}); load();
+  };
+
+  const updateRole = async (userId, role) => {
+    await callAdminFn("update_role", { userId, role });
+    load();
+  };
+
+  const deleteConsultant = async (userId) => {
+    if (!window.confirm("¿Eliminar este usuario permanentemente?")) return;
+    await callAdminFn("delete_user", { userId });
+    load();
+  };
+
+  const [saving, setSaving] = useState(false);
+
   const tabStyle = (key) => ({ padding:"8px 18px", borderRadius:8, border:"none", cursor:"pointer", fontWeight:700, fontSize:13, fontFamily:"'DM Sans', sans-serif", background:tab===key?"linear-gradient(135deg,#0ea5e9,#2563eb)":"transparent", color:tab===key?"#fff":"#64748b" });
-  const TABS_ADMIN = { clients:"Clientes", consultants:"Consultores", assignments:"Asignaciones", backup:"Suplencias" };
+  const TABS_ADMIN = { clients:"Clientes", consultants:"Consultores", assignments:"Asignaciones", backup:"Suplencias", progress:"Progreso" };
 
   return (
     <div style={{ minHeight:"100vh", background:"#f0f4f8" }}>
@@ -299,7 +514,10 @@ function AdminPanel({ profile, tr, onBack }) {
             )}
             {tab==="consultants" && (
               <div>
-                <h3 style={{ fontSize:17, fontWeight:700, color:"#1e293b", marginBottom:16 }}>Consultores ({consultants.length})</h3>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+                  <h3 style={{ fontSize:17, fontWeight:700, color:"#1e293b" }}>Consultores ({consultants.length})</h3>
+                  <BtnPrimary onClick={()=>{ setForm({ role:"consultant" }); setModal("consultant"); }}>{icons.plus(14)} Nuevo consultor</BtnPrimary>
+                </div>
                 <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
                   {consultants.map(c=>(
                     <div key={c.id} style={{ background:"#fff", border:"1.5px solid #e2e8f0", borderRadius:12, padding:"14px 18px", display:"flex", alignItems:"center", gap:14 }}>
@@ -311,6 +529,15 @@ function AdminPanel({ profile, tr, onBack }) {
                         <div style={{ fontSize:12, color:"#94a3b8" }}>{c.email}</div>
                       </div>
                       <Badge label={c.role} style={{ background:c.role==="admin"?"#fef9c3":"#eff6ff", color:c.role==="admin"?"#92400e":"#2563eb", border:"none" }} />
+                      {/* Promote/demote button */}
+                      <button
+                        onClick={()=>updateRole(c.id, c.role==="admin"?"consultant":"admin")}
+                        title={c.role==="admin"?"Quitar admin":"Promover a admin"}
+                        style={{ background:c.role==="admin"?"#fff0f0":"#fffbeb", border:`1.5px solid ${c.role==="admin"?"#fecaca":"#fde68a"}`, borderRadius:8, padding:"5px 10px", cursor:"pointer", fontSize:11.5, fontWeight:700, color:c.role==="admin"?"#ef4444":"#92400e" }}
+                      >
+                        {c.role==="admin"?"− Admin":"+ Admin"}
+                      </button>
+                      <button onClick={()=>deleteConsultant(c.id)} style={{ background:"#fff0f0", border:"none", borderRadius:7, color:"#ef4444", cursor:"pointer", padding:"6px 8px", lineHeight:0 }}>{icons.trash(14)}</button>
                     </div>
                   ))}
                 </div>
@@ -368,10 +595,58 @@ function AdminPanel({ profile, tr, onBack }) {
                 </div>
               </div>
             )}
+            {tab==="progress" && (
+              <div>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+                  <h3 style={{ fontSize:17, fontWeight:700, color:"#1e293b" }}>Progreso de todos los clientes</h3>
+                  <ConsolidatedReportButton clients={clients} assignments={assignments} />
+                </div>
+                <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                  {clients.map(client => {
+                    const assigned = assignments.filter(a=>a.client_id===client.id&&a.active&&a.role!=="backup");
+                    return (
+                      <div key={client.id} style={{ background:"#fff", border:"1.5px solid #e2e8f0", borderRadius:12, padding:"16px 20px" }}>
+                        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10 }}>
+                          <div>
+                            <div style={{ fontWeight:700, fontSize:15, color:"#1e293b" }}>{client.name}</div>
+                            <div style={{ display:"flex", gap:6, marginTop:4, flexWrap:"wrap" }}>
+                              {assigned.map(a=>(
+                                <span key={a.id} style={{ fontSize:11.5, color:"#64748b", display:"flex", alignItems:"center", gap:4 }}>
+                                  {icons.user(11)} {a.profiles?.name} {a.area&&<span style={{ color:"#94a3b8" }}>({a.area})</span>}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                          <ClientProgressBadge clientId={client.id} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {clients.length===0 && <div style={{ textAlign:"center", padding:"40px 0", color:"#94a3b8" }}>No hay clientes creados aún</div>}
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
 
+      {modal==="consultant" && (
+        <Modal title="Nuevo consultor" onClose={()=>{ setModal(null); setForm({}); }}>
+          <Field label="Nombre completo"><input style={inp} placeholder="ej. Ana García" value={form.name||""} onChange={e=>setForm({ ...form, name:e.target.value })} /></Field>
+          <Field label="Email"><input style={inp} type="email" placeholder="ana@empresa.com" value={form.email||""} onChange={e=>setForm({ ...form, email:e.target.value })} /></Field>
+          <Field label="Contraseña temporal"><input style={inp} type="password" placeholder="mínimo 6 caracteres" value={form.password||""} onChange={e=>setForm({ ...form, password:e.target.value })} /></Field>
+          <Field label="Rol">
+            <select style={sel} value={form.role||"consultant"} onChange={e=>setForm({ ...form, role:e.target.value })}>
+              <option value="consultant">Consultor</option>
+              <option value="admin">Admin</option>
+            </select>
+          </Field>
+          <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:8 }}>
+            <BtnGhost onClick={()=>{ setModal(null); setForm({}); }}>Cancelar</BtnGhost>
+            <BtnPrimary onClick={saveConsultant} disabled={saving}>{saving?"Creando...":"Crear usuario"}</BtnPrimary>
+          </div>
+        </Modal>
+      )}
       {modal==="client" && (
         <Modal title={editId?"Editar cliente":"Nuevo cliente"} onClose={()=>{ setModal(null); setForm({}); setEditId(null); }}>
           <Field label="Nombre"><input style={inp} placeholder="ej. Acme Corp" value={form.name||""} onChange={e=>setForm({ ...form, name:e.target.value, slug:e.target.value.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"") })} /></Field>
@@ -686,14 +961,15 @@ function OverviewSection({ clientId, lang, tr }) {
 
   useEffect(()=>{
     const load = async () => {
-      const [{ data:cl },{ data:tk },{ data:rs }] = await Promise.all([
+      const [{ data:cl },{ data:tk },{ data:rs },{ data:sr }] = await Promise.all([
         supabase.from("client_checklist").select("phase,done").eq("client_id",clientId),
         supabase.from("client_tasks").select("status").eq("client_id",clientId),
         supabase.from("client_resources").select("id").eq("client_id",clientId),
+        supabase.from("client_service_requests").select("id,status").eq("client_id",clientId),
       ]);
-      const checklist=cl||[]; const tasks=tk||[];
+      const checklist=cl||[]; const tasks=tk||[]; const srs=sr||[];
       const phases=[...new Set(checklist.map(i=>i.phase))].map(phase=>({ phase, total:checklist.filter(i=>i.phase===phase).length, done:checklist.filter(i=>i.phase===phase&&i.done).length }));
-      setCounts({ checklist:checklist.length, done:checklist.filter(i=>i.done).length, tasks:tasks.length, tasksDone:tasks.filter(t=>t.status==="Completado").length, resources:(rs||[]).length, phases });
+      setCounts({ checklist:checklist.length, done:checklist.filter(i=>i.done).length, tasks:tasks.length, tasksDone:tasks.filter(t=>t.status==="Completado").length, resources:(rs||[]).length, srsTotal:srs.length, srsOpen:srs.filter(s=>s.status==="Abierto"||s.status==="En progreso").length, phases });
       setLoading(false);
     };
     load();
@@ -704,11 +980,12 @@ function OverviewSection({ clientId, lang, tr }) {
 
   return (
     <div>
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:14, marginBottom:24 }}>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginBottom:24 }}>
         {[
           { label:"Checklist", val:`${counts.done}/${counts.checklist}`, sub:`${pct}%`, color:"#2196f3" },
           { label:tr.tasks, val:`${counts.tasksDone}/${counts.tasks}`, sub:tr.done, color:"#22a861" },
           { label:tr.resources, val:counts.resources, sub:"links", color:"#7c3aed" },
+          { label:"SRs ServiceNow", val:counts.srsTotal||0, sub:`${counts.srsOpen||0} abiertos`, color:(counts.srsOpen||0)>0?"#f59e0b":"#22a861" },
         ].map(({ label,val,sub,color })=>(
           <div key={label} style={{ background:"#fff", border:"1.5px solid #e2e8f0", borderRadius:14, padding:"20px 22px" }}>
             <div style={{ fontSize:12, fontWeight:700, color:"#94a3b8", textTransform:"uppercase", letterSpacing:"0.7px", marginBottom:8 }}>{label}</div>
@@ -751,13 +1028,140 @@ function OverviewSection({ clientId, lang, tr }) {
   );
 }
 
-// ── DASHBOARD ─────────────────────────────────────────────────────────────────
-const TABS = ["overview","checklist","tasks","resources"];
-const TAB_LABELS = { es:{ overview:"Resumen",checklist:"Checklist",tasks:"Tareas",resources:"Recursos" }, en:{ overview:"Overview",checklist:"Checklist",tasks:"Tasks",resources:"Resources" } };
-const TAB_ICONS = { overview:"📊",checklist:"✅",tasks:"📋",resources:"🔗" };
+// ── SERVICE REQUESTS SECTION ──────────────────────────────────────────────────
+const emptySR = { sr_number:"", title:"", priority:"Media", status:"Abierto", notes:"" };
+function ServiceRequestsSection({ clientId, lang, tr }) {
+  const [srs, setSrs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [modal, setModal] = useState(false);
+  const [form, setForm] = useState(emptySR);
+  const [editing, setEditing] = useState(null);
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from("client_service_requests").select("*").eq("client_id", clientId).order("created_at");
+    setSrs(data||[]); setLoading(false);
+  }, [clientId]);
+  useEffect(() => { load(); }, [load]);
+
+  const save = async () => {
+    if (!form.sr_number?.trim()) return;
+    if (editing) { await supabase.from("client_service_requests").update({ ...form }).eq("id", editing); setSrs(prev => prev.map(s => s.id===editing ? { ...s,...form } : s)); }
+    else { const { data } = await supabase.from("client_service_requests").insert({ ...form, client_id:clientId }).select().single(); if(data) setSrs(prev => [...prev, data]); }
+    setModal(false);
+  };
+  const del = async (id) => { await supabase.from("client_service_requests").delete().eq("id", id); setSrs(prev => prev.filter(s => s.id!==id)); };
+
+  const SR_STATUS = ["Abierto","En progreso","Resuelto","Cerrado"];
+  const SR_PRIORITY = ["Alta","Media","Baja"];
+  const statusColor = { "Abierto":{ bg:"#fffbeb",text:"#f59e0b",border:"#fde68a" }, "En progreso":{ bg:"#eff6ff",text:"#2563eb",border:"#bfdbfe" }, "Resuelto":{ bg:"#f0fdf4",text:"#16a34a",border:"#86efac" }, "Cerrado":{ bg:"#f1f5f9",text:"#64748b",border:"#e2e8f0" } };
+  const priColor = { "Alta":{ bg:"#fff0f0",text:"#ef4444",border:"#fecaca" }, "Media":{ bg:"#fffbeb",text:"#f59e0b",border:"#fde68a" }, "Baja":{ bg:"#f0fdf4",text:"#16a34a",border:"#86efac" } };
+  const openCount = srs.filter(s=>s.status==="Abierto"||s.status==="En progreso").length;
+
+  if (loading) return <Spinner />;
+  return (
+    <div>
+      {/* Summary */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12, marginBottom:20 }}>
+        {[
+          { label:"Total SRs", val:srs.length, color:"#2563eb" },
+          { label:"Abiertos", val:srs.filter(s=>s.status==="Abierto").length, color:"#f59e0b" },
+          { label:"En progreso", val:srs.filter(s=>s.status==="En progreso").length, color:"#2563eb" },
+          { label:"Resueltos/Cerrados", val:srs.filter(s=>s.status==="Resuelto"||s.status==="Cerrado").length, color:"#16a34a" },
+        ].map(b=>(
+          <div key={b.label} style={{ background:"#fff", border:"1.5px solid #e2e8f0", borderRadius:12, padding:"14px 16px" }}>
+            <div style={{ fontSize:22, fontWeight:800, color:b.color, fontFamily:"'DM Mono',monospace" }}>{b.val}</div>
+            <div style={{ fontSize:12, color:"#94a3b8", marginTop:2 }}>{b.label}</div>
+          </div>
+        ))}
+      </div>
+      {openCount > 0 && <div style={{ background:"#fffbeb", border:"1.5px solid #fde68a", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#92400e", display:"flex", alignItems:"center", gap:8 }}>⚠️ <strong>{openCount}</strong> SR(s) pendientes de resolución</div>}
+
+      <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+        {srs.length===0 && <div style={{ textAlign:"center", padding:"40px 0", color:"#94a3b8" }}>No hay SRs registrados. Agrega el primero.</div>}
+        {srs.map(sr=>{
+          const sc = statusColor[sr.status]||statusColor["Abierto"];
+          const pc = priColor[sr.priority]||priColor["Media"];
+          return (
+            <div key={sr.id} style={{ background:"#fff", border:"1.5px solid #e2e8f0", borderRadius:12, padding:"14px 16px", display:"flex", alignItems:"flex-start", gap:14 }}
+              onMouseEnter={e=>e.currentTarget.style.boxShadow="0 4px 16px rgba(0,0,0,0.07)"} onMouseLeave={e=>e.currentTarget.style.boxShadow="none"}
+            >
+              <div style={{ flex:1 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
+                  <span style={{ fontFamily:"'DM Mono',monospace", fontSize:13, fontWeight:700, color:"#2563eb" }}>{sr.sr_number}</span>
+                  <span style={{ fontSize:14, fontWeight:600, color:"#1e293b" }}>{sr.title}</span>
+                </div>
+                <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                  <Badge label={sr.priority} style={{ background:pc.bg, color:pc.text, border:`1px solid ${pc.border}` }} />
+                  <Badge label={sr.status} style={{ background:sc.bg, color:sc.text, border:`1px solid ${sc.border}` }} />
+                  {sr.notes && <span style={{ fontSize:12, color:"#94a3b8" }}>{sr.notes}</span>}
+                </div>
+              </div>
+              <div style={{ display:"flex", gap:4 }}>
+                <button onClick={()=>{ setEditing(sr.id); setForm({ ...sr }); setModal(true); }} style={{ background:"#eff6ff", border:"none", borderRadius:7, color:"#2563eb", cursor:"pointer", padding:"6px 8px", lineHeight:0 }}>{icons.edit(14)}</button>
+                <button onClick={()=>del(sr.id)} style={{ background:"#fff0f0", border:"none", borderRadius:7, color:"#ef4444", cursor:"pointer", padding:"6px 8px", lineHeight:0 }}>{icons.trash(14)}</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <BtnAdd onClick={()=>{ setEditing(null); setForm(emptySR); setModal(true); }}>Agregar SR</BtnAdd>
+      {modal && (
+        <Modal title={editing?"Editar SR":"Nuevo SR de ServiceNow"} onClose={()=>setModal(false)}>
+          <Field label="Número de SR"><input style={inp} placeholder="ej. REQ0012345" value={form.sr_number} onChange={e=>setForm({ ...form, sr_number:e.target.value })} /></Field>
+          <Field label="Título / Descripción"><input style={inp} placeholder="ej. Activación de Joule en tenant BTP" value={form.title} onChange={e=>setForm({ ...form, title:e.target.value })} /></Field>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+            <Field label="Prioridad"><select style={sel} value={form.priority} onChange={e=>setForm({ ...form, priority:e.target.value })}>{SR_PRIORITY.map(p=><option key={p}>{p}</option>)}</select></Field>
+            <Field label="Estado"><select style={sel} value={form.status} onChange={e=>setForm({ ...form, status:e.target.value })}>{SR_STATUS.map(s=><option key={s}>{s}</option>)}</select></Field>
+          </div>
+          <Field label="Notas"><input style={inp} placeholder="Observaciones adicionales" value={form.notes||""} onChange={e=>setForm({ ...form, notes:e.target.value })} /></Field>
+          <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:8 }}><BtnGhost onClick={()=>setModal(false)}>{tr.cancel}</BtnGhost><BtnPrimary onClick={save}>{tr.save}</BtnPrimary></div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── REPORT BUTTON (single client) ─────────────────────────────────────────────
+function ReportButton({ client, consultants, lang, tr }) {
+  const [loading, setLoading] = useState(false);
+
+  const generate = async () => {
+    setLoading(true);
+    try {
+      const [{ data:checklist },{ data:tasks },{ data:resources },{ data:serviceRequests }] = await Promise.all([
+        supabase.from("client_checklist").select("*").eq("client_id", client.id).order("sort_order").order("created_at"),
+        supabase.from("client_tasks").select("*").eq("client_id", client.id).order("created_at"),
+        supabase.from("client_resources").select("*").eq("client_id", client.id).order("created_at"),
+        supabase.from("client_service_requests").select("*").eq("client_id", client.id).order("created_at"),
+      ]);
+      const doc = await generateClientPDF({ client, consultants, checklist:checklist||[], tasks:tasks||[], resources:resources||[], serviceRequests:serviceRequests||[], lang });
+      doc.save(`${client.slug || client.name.toLowerCase().replace(/\s+/g,"-")}-report.pdf`);
+    } catch(e) { alert("Error generando PDF: " + e.message); }
+    setLoading(false);
+  };
+
+  return (
+    <button onClick={generate} disabled={loading} style={{ display:"inline-flex", alignItems:"center", gap:6, background:loading?"#f1f5f9":"#eff6ff", border:"1.5px solid #bfdbfe", borderRadius:8, padding:"6px 14px", cursor:loading?"not-allowed":"pointer", fontSize:12.5, fontWeight:700, color:"#2563eb", transition:"all 0.2s" }}>
+      📄 {loading ? "Generando..." : (lang==="en"?"PDF Report":"Reporte PDF")}
+    </button>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TABS
+// ─────────────────────────────────────────────────────────────────────────────
+const TABS = ["overview","checklist","tasks","resources","srs"];
+const TAB_LABELS = { es:{ overview:"Resumen",checklist:"Checklist",tasks:"Tareas",resources:"Recursos",srs:"SRs ServiceNow" }, en:{ overview:"Overview",checklist:"Checklist",tasks:"Tasks",resources:"Resources",srs:"SRs ServiceNow" } };
+const TAB_ICONS = { overview:"📊",checklist:"✅",tasks:"📋",resources:"🔗",srs:"🎫" };
 
 function DashboardView({ client, profile, tr, lang, setLang, onBack }) {
   const [tab, setTab] = useState("overview");
+  const [consultants, setConsultants] = useState([]);
+
+  useEffect(() => {
+    supabase.from("client_assignments").select("*, profiles(name,email)").eq("client_id", client.id).eq("active", true).then(({ data }) => setConsultants(data||[]));
+  }, [client.id]);
+
   const tabStyle = (key) => ({ display:"inline-flex", alignItems:"center", gap:6, padding:"9px 18px", borderRadius:10, border:"none", cursor:"pointer", fontWeight:700, fontSize:13.5, fontFamily:"'DM Sans',sans-serif", transition:"all 0.18s", background:tab===key?"linear-gradient(135deg,#0ea5e9,#2563eb)":"transparent", color:tab===key?"#fff":"#64748b", boxShadow:tab===key?"0 2px 8px rgba(37,99,235,0.3)":"none" });
   return (
     <div style={{ minHeight:"100vh", background:"#f0f4f8" }}>
@@ -770,6 +1174,7 @@ function DashboardView({ client, profile, tr, lang, setLang, onBack }) {
               <div><div style={{ fontSize:16, fontWeight:800, color:"#0f172a" }}>{client.name}</div><div style={{ fontSize:11, color:"#94a3b8" }}>{tr.appSubtitle}</div></div>
             </div>
             <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+              <ReportButton client={client} consultants={consultants} lang={lang} tr={tr} />
               <div style={{ display:"flex", background:"#f1f5f9", borderRadius:8, padding:3, gap:2 }}>
                 {["es","en"].map(l=><button key={l} onClick={()=>setLang(l)} style={{ padding:"4px 10px", borderRadius:6, border:"none", cursor:"pointer", fontWeight:700, fontSize:12, background:lang===l?"#fff":"transparent", color:lang===l?"#2563eb":"#94a3b8" }}>{l.toUpperCase()}</button>)}
               </div>
@@ -787,6 +1192,7 @@ function DashboardView({ client, profile, tr, lang, setLang, onBack }) {
         {tab==="checklist" && <ChecklistSection clientId={client.id} lang={lang} tr={tr} />}
         {tab==="tasks"     && <TasksSection     clientId={client.id} lang={lang} tr={tr} />}
         {tab==="resources" && <ResourcesSection clientId={client.id} lang={lang} tr={tr} />}
+        {tab==="srs"       && <ServiceRequestsSection clientId={client.id} lang={lang} tr={tr} />}
       </div>
       <div style={{ textAlign:"center", padding:"24px 0 32px", color:"#cbd5e1", fontSize:12 }}>Joule × Ariba {tr.footerText} · {new Date().getFullYear()}</div>
     </div>
