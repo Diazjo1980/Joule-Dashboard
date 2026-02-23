@@ -79,6 +79,11 @@ const t = {
     generateBtn: "Generar",
     otherCategory: "Otra",
     customPhase: "Personalizado",
+    login: "Ingresar",
+    loggingIn: "Ingresando...",
+    password: "Contraseña",
+    myClients: "Mis Clientes",
+    noClientsAssigned: "No tienes clientes asignados",
   },
   en: {
     appTitle: "Joule × Ariba",
@@ -160,6 +165,11 @@ const t = {
     generateBtn: "Generate",
     otherCategory: "Other",
     customPhase: "Custom",
+    login: "Sign In",
+    loggingIn: "Signing in...",
+    password: "Password",
+    myClients: "My Clients",
+    noClientsAssigned: "You have no clients assigned",
   }
 };
 
