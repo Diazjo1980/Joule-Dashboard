@@ -100,10 +100,11 @@ const BtnAdd = ({ onClick, children }) => (
 
 // ── Overview Pillar Cards ─────────────────────────────────────────────────────
 const PILLAR_DEFS = [
-  { key: "pillar1", keyS: "pillar1sub", color: "#e8f4fd", border: "#bbd6f0", icon: "🔑", iconBg: "#2196f3" },
-  { key: "pillar2", keyS: "pillar2sub", color: "#e8f8f0", border: "#b2dfc9", icon: "⚙️", iconBg: "#22a861" },
-  { key: "pillar3", keyS: "pillar3sub", color: "#f3eeff", border: "#d0baff", icon: "🔗", iconBg: "#7c3aed" },
-  { key: "pillar4", keyS: "pillar4sub", color: "#fff4e8", border: "#ffd4a0", icon: "✅", iconBg: "#f57c00" },
+  { key: "pillar1", keyS: "pillar1sub", color: "#e8f4fd", border: "#bbd6f0", icon: "🔍" },
+  { key: "pillar2", keyS: "pillar2sub", color: "#e8f8f0", border: "#b2dfc9", icon: "📋" },
+  { key: "pillar3", keyS: "pillar3sub", color: "#f3eeff", border: "#d0baff", icon: "🧭" },
+  { key: "pillar4", keyS: "pillar4sub", color: "#fff4e8", border: "#ffd4a0", icon: "⚙️" },
+  { key: "pillar5", keyS: "pillar5sub", color: "#fdf2f8", border: "#f0abda", icon: "🚀" },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -120,7 +121,7 @@ function ChecklistSection({ lang, tr }) {
   const del = (id) => save(items.filter(i => i.id !== id));
   const addItem = () => {
     if (!form.item_es.trim() && !form.item_en.trim()) return;
-    save([...items, { id: Date.now(), phase: form.phase || "Custom", phaseKey: "custom", item_es: form.item_es, item_en: form.item_en || form.item_es, done: false }]);
+    save([...items, { id: Date.now(), phase: form.phase || tr.customPhase, phaseKey: "custom", item_es: form.item_es, item_en: form.item_en || form.item_es, done: false }]);
     setModal(false); setForm({ phase: "", item_es: "", item_en: "" });
   };
 
@@ -393,7 +394,7 @@ function ResourcesSection({ lang, tr }) {
   if (search.trim()) filtered = filtered.filter(d => d.title.toLowerCase().includes(search.toLowerCase()) || d.url.toLowerCase().includes(search.toLowerCase()) || (d.notes || "").toLowerCase().includes(search.toLowerCase()));
 
   const grouped = filtered.reduce((acc, d) => {
-    const cat = d.category || "Other";
+    const cat = d.category || tr.otherCategory;
     if (!acc[cat]) acc[cat] = [];
     acc[cat].push(d);
     return acc;
@@ -500,7 +501,7 @@ function OverviewSection({ lang, tr, checklist, tasks, docs }) {
 
   return (
     <div>
-      <ClientURLGenerator />
+      <ClientURLGenerator tr={tr} />
       {/* Summary cards */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 24 }}>
         {[
@@ -519,7 +520,7 @@ function OverviewSection({ lang, tr, checklist, tasks, docs }) {
       {/* Pillar tiles */}
       <div style={{ background: "#fff", border: "1.5px solid #e2e8f0", borderRadius: 14, padding: "22px 24px", marginBottom: 22 }}>
         <h3 style={{ fontSize: 16, fontWeight: 700, color: "#1e293b", marginBottom: 18, textAlign: "center" }}>{tr.pillarsTitle}</h3>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12 }}>
           {PILLAR_DEFS.map(({ key, keyS, color, border, icon }) => (
             <div key={key} style={{ background: color, border: `1.5px solid ${border}`, borderRadius: 12, padding: "18px 20px", display: "flex", alignItems: "center", gap: 14 }}>
               <span style={{ fontSize: 26 }}>{icon}</span>
@@ -534,7 +535,7 @@ function OverviewSection({ lang, tr, checklist, tasks, docs }) {
 
       {/* Phase progress */}
       <div style={{ background: "#fff", border: "1.5px solid #e2e8f0", borderRadius: 14, padding: "22px 24px" }}>
-        <h3 style={{ fontSize: 15, fontWeight: 700, color: "#1e293b", marginBottom: 16 }}>Checklist por fase</h3>
+        <h3 style={{ fontSize: 15, fontWeight: 700, color: "#1e293b", marginBottom: 16 }}>{tr.checklistByPhase}</h3>
         {phases.map(phase => {
           const items = checklist.filter(i => i.phase === phase);
           const phDone = items.filter(i => i.done).length;
@@ -561,7 +562,7 @@ function OverviewSection({ lang, tr, checklist, tasks, docs }) {
 }
 
 // ── Copy Link Button ──────────────────────────────────────────────────────────
-function CopyLinkButton() {
+function CopyLinkButton({ tr }) {
   const [copied, setCopied] = useState(false);
   const copy = () => {
     navigator.clipboard.writeText(window.location.href).then(() => {
@@ -570,14 +571,14 @@ function CopyLinkButton() {
     });
   };
   return (
-    <button onClick={copy} title="Copiar enlace del cliente" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: copied ? "#f0fdf4" : "#f8fafc", border: `1.5px solid ${copied ? "#86efac" : "#e2e8f0"}`, borderRadius: 8, padding: "5px 12px", cursor: "pointer", fontSize: 12, fontWeight: 600, color: copied ? "#16a34a" : "#64748b", transition: "all 0.2s" }}>
-      {copied ? "✅ Copiado" : "🔗 Copiar link"}
+    <button onClick={copy} title={tr.copyLink} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: copied ? "#f0fdf4" : "#f8fafc", border: `1.5px solid ${copied ? "#86efac" : "#e2e8f0"}`, borderRadius: 8, padding: "5px 12px", cursor: "pointer", fontSize: 12, fontWeight: 600, color: copied ? "#16a34a" : "#64748b", transition: "all 0.2s" }}>
+      {copied ? tr.copied : tr.copyLink}
     </button>
   );
 }
 
 // ── Generate Client URL helper ────────────────────────────────────────────────
-function ClientURLGenerator() {
+function ClientURLGenerator({ tr }) {
   const [clientName, setClientName] = useState("");
   const [generated, setGenerated] = useState("");
   const [copied, setCopied] = useState(false);
@@ -596,23 +597,23 @@ function ClientURLGenerator() {
 
   return (
     <div style={{ background: "#fff", border: "1.5px solid #e2e8f0", borderRadius: 14, padding: "22px 24px", marginBottom: 20 }}>
-      <h3 style={{ fontSize: 15, fontWeight: 700, color: "#1e293b", marginBottom: 4 }}>🔗 Generar enlace por cliente</h3>
-      <p style={{ fontSize: 13, color: "#64748b", marginBottom: 16 }}>Cada cliente tiene su propia URL con datos separados en localStorage.</p>
+      <h3 style={{ fontSize: 15, fontWeight: 700, color: "#1e293b", marginBottom: 4 }}>{tr.generateLinkTitle}</h3>
+      <p style={{ fontSize: 13, color: "#64748b", marginBottom: 16 }}>{tr.generateLinkDesc}</p>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <input
           style={{ ...inp, flex: "1 1 200px" }}
-          placeholder="Nombre del cliente (ej: acme, globant, sap-latam)"
+          placeholder={tr.clientNamePlaceholder}
           value={clientName}
           onChange={e => setClientName(e.target.value)}
           onKeyDown={e => e.key === "Enter" && generate()}
         />
-        <BtnPrimary onClick={generate}>Generar</BtnPrimary>
+        <BtnPrimary onClick={generate}>{tr.generateBtn}</BtnPrimary>
       </div>
       {generated && (
         <div style={{ marginTop: 14, background: "#f8fafc", border: "1.5px solid #e2e8f0", borderRadius: 8, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10 }}>
           <span style={{ flex: 1, fontFamily: "'DM Mono', monospace", fontSize: 12.5, color: "#2563eb", wordBreak: "break-all" }}>{generated}</span>
           <button onClick={copy} style={{ flexShrink: 0, background: copied ? "#f0fdf4" : "#eff6ff", border: `1.5px solid ${copied ? "#86efac" : "#bfdbfe"}`, borderRadius: 7, padding: "5px 12px", cursor: "pointer", fontSize: 12, fontWeight: 700, color: copied ? "#16a34a" : "#2563eb" }}>
-            {copied ? "✅" : "Copiar"}
+            {copied ? tr.copied : tr.copyBtn}
           </button>
         </div>
       )}
@@ -670,10 +671,9 @@ export default function App() {
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
               {/* Client badge */}
               <div style={{ background: CLIENT_ID === "default" ? "#fef9c3" : "#eff6ff", border: `1px solid ${CLIENT_ID === "default" ? "#fde68a" : "#bfdbfe"}`, borderRadius: 20, padding: "3px 12px", fontSize: 11.5, fontWeight: 700, display: "flex", alignItems: "center", gap: 5, fontFamily: "'DM Mono', monospace", color: CLIENT_ID === "default" ? "#92400e" : "#1d4ed8" }}>
-                👤 {CLIENT_ID === "default" ? "sin cliente" : CLIENT_ID}
+                👤 {CLIENT_ID === "default" ? tr.noClient : CLIENT_ID}
               </div>
-              {/* Copy current URL */}
-              <CopyLinkButton />
+              <CopyLinkButton tr={tr} />
               {/* Lang toggle */}
               <div style={{ display: "flex", background: "#f1f5f9", borderRadius: 8, padding: 3, gap: 2 }}>
                 {["es", "en"].map(l => (
@@ -706,7 +706,7 @@ export default function App() {
 
       {/* Footer */}
       <div style={{ textAlign: "center", padding: "24px 0 32px", color: "#cbd5e1", fontSize: 12 }}>
-        Joule × Ariba Dashboard · {new Date().getFullYear()} · Local Storage Mode
+        Joule × Ariba {tr.footerText} · {new Date().getFullYear()}
       </div>
     </div>
   );
