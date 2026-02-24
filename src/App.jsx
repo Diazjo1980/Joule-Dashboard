@@ -593,7 +593,7 @@ function AdminPanel({ profile, tr, onBack }) {
                   <BtnPrimary onClick={()=>{ setForm({}); setModal("backup"); }}>{icons.plus(14)} {tr.registerBackup}</BtnPrimary>
                 </div>
                 <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-                  {assignments.filter(a=>a.role==="backup").length===0 && <div style={{ textAlign:"center", padding:"40px 0", color:"#94a3b8" }}{tr.noBackups}</div>}
+                  {assignments.filter(a=>a.role==="backup").length===0 && <div style={{ textAlign:"center", padding:"40px 0", color:"#94a3b8" }}>{tr.noBackups}</div>}
                   {assignments.filter(a=>a.role==="backup").map(a=>{
                     const today = new Date().toISOString().split("T")[0];
                     const active = a.backup_end >= today && a.backup_start <= today;
@@ -619,7 +619,7 @@ function AdminPanel({ profile, tr, onBack }) {
             {tab==="progress" && (
               <div>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
-                  <h3 style={{ fontSize:17, fontWeight:700, color:"#1e293b" }}{tr.allClientsProgress}</h3>
+                  <h3 style={{ fontSize:17, fontWeight:700, color:"#1e293b" }}>{tr.allClientsProgress}</h3>
                   <ConsolidatedReportButton clients={clients} assignments={assignments} />
                 </div>
                 <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
