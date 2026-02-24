@@ -35,6 +35,15 @@ exports.handler = async (event) => {
   const { action } = body;
 
   try {
+    // ── RESET PASSWORD ───────────────────────────────────────────────────────
+    if (action === "reset_password") {
+      const { userId, password } = body;
+      if (!userId || !password) return { statusCode: 400, headers, body: JSON.stringify({ error: "userId and password required" }) };
+      const { error } = await supabaseAdmin.auth.admin.updateUserById(userId, { password });
+      if (error) return { statusCode: 400, headers, body: JSON.stringify({ error: error.message }) };
+      return { statusCode: 200, headers, body: JSON.stringify({ success: true }) };
+    }
+
     // ── CREATE USER ──────────────────────────────────────────────────────────
     if (action === "create_user") {
       const { email, password, name, role } = body;

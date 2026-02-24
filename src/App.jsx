@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./lib/supabase";
-import { generateClientPDF, generateConsolidatedPDF } from "./lib/pdfReport";
-import t from "./i18n";
+import { generateClientPDF } from "./lib/pdfReport";
+import t, { PILLARS } from "./i18n";
 import { PHASE_COLORS, PRIORITY_COLORS, STATUS_COLORS } from "./data";
 
 const icons = {
@@ -142,7 +142,7 @@ function ClientListView({ profile, tr, onSelectClient, lang, setLang }) {
           <div style={{ display:"flex", alignItems:"center", gap:10 }}>
             {profile.role === "admin" && (
               <button onClick={()=>onSelectClient("__admin__")} style={{ display:"inline-flex", alignItems:"center", gap:6, background:"#fef9c3", border:"1.5px solid #fde68a", borderRadius:8, padding:"6px 14px", cursor:"pointer", fontSize:13, fontWeight:700, color:"#92400e" }}>
-                {icons.shield(14)} Admin
+                {icons.shield(14)} {tr.adminPanel}
               </button>
             )}
             <div style={{ display:"flex", background:"#f1f5f9", borderRadius:8, padding:3, gap:2 }}>
@@ -393,6 +393,7 @@ function AdminPanel({ profile, tr, onBack }) {
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
   const [editId, setEditId] = useState(null);
+  const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -414,7 +415,7 @@ function AdminPanel({ profile, tr, onBack }) {
   };
 
   const deleteClient = async (id) => {
-    if (!window.confirm("¿Eliminar este cliente y todos sus datos?")) return;
+    if (!window.confirm(tr.deleteClientConfirm)) return;
     await supabase.from("clients").delete().eq("id",id); load();
   };
 
@@ -432,7 +433,7 @@ function AdminPanel({ profile, tr, onBack }) {
 
   const deleteAssignment = async (id) => { await supabase.from("client_assignments").delete().eq("id",id); load(); };
 
-  // ── Call Netlify function ──────────────────────────────────────────────────
+  // ── Call Netlify function ────────────────────────────────────────────────
   const callAdminFn = async (action, data) => {
     const { data: { session } } = await supabase.auth.getSession();
     const res = await fetch("/.netlify/functions/admin-users", {
@@ -440,33 +441,47 @@ function AdminPanel({ profile, tr, onBack }) {
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${session.access_token}` },
       body: JSON.stringify({ action, ...data }),
     });
-    return res.json();
+    const json = await res.json();
+    if (json.error) throw new Error(json.error);
+    return json;
   };
 
   const saveConsultant = async () => {
-    if (!form.email?.trim() || !form.password?.trim() || !form.name?.trim()) { alert("Email, contraseña y nombre son requeridos"); return; }
+    if (!form.name?.trim()) { alert(tr.fullName + " es requerido"); return; }
+    if (!editId && (!form.email?.trim() || !form.password?.trim())) { alert("Email y contraseña son requeridos"); return; }
     setSaving(true);
-    const result = await callAdminFn("create_user", { email: form.email, password: form.password, name: form.name, role: form.role || "consultant" });
+    try {
+      if (editId) {
+        // Edit: update name and role in profiles, optionally reset password
+        await supabase.from("profiles").update({ name: form.name, role: form.role || "consultant" }).eq("id", editId);
+        if (form.password?.trim()) {
+          await callAdminFn("reset_password", { userId: editId, password: form.password });
+        }
+      } else {
+        await callAdminFn("create_user", { email: form.email, password: form.password, name: form.name, role: form.role || "consultant" });
+      }
+      setModal(null); setForm({}); setEditId(null); load();
+    } catch(e) { alert(e.message); }
     setSaving(false);
-    if (result.error) { alert(result.error); return; }
-    setModal(null); setForm({}); load();
   };
 
   const updateRole = async (userId, role) => {
-    await callAdminFn("update_role", { userId, role });
-    load();
+    try { await callAdminFn("update_role", { userId, role }); load(); }
+    catch(e) { alert(e.message); }
   };
 
-  const deleteConsultant = async (userId) => {
-    if (!window.confirm("¿Eliminar este usuario permanentemente?")) return;
-    await callAdminFn("delete_user", { userId });
-    load();
+  // Fix: delete admin - use service role via Netlify fn, works for any role
+  const deleteConsultant = async (c) => {
+    if (c.id === profile.id) { alert("No puedes eliminar tu propio usuario."); return; }
+    if (!window.confirm(tr.deleteUserConfirm)) return;
+    try {
+      await callAdminFn("delete_user", { userId: c.id });
+      load();
+    } catch(e) { alert(e.message); }
   };
-
-  const [saving, setSaving] = useState(false);
 
   const tabStyle = (key) => ({ padding:"8px 18px", borderRadius:8, border:"none", cursor:"pointer", fontWeight:700, fontSize:13, fontFamily:"'DM Sans', sans-serif", background:tab===key?"linear-gradient(135deg,#0ea5e9,#2563eb)":"transparent", color:tab===key?"#fff":"#64748b" });
-  const TABS_ADMIN = { clients:"Clientes", consultants:"Consultores", assignments:"Asignaciones", backup:"Suplencias", progress:"Progreso" };
+  const TABS_ADMIN = { clients: tr.tabClients, consultants: tr.tabConsultants, assignments: tr.tabAssignments, backup: tr.tabBackup, progress: tr.tabProgress };
 
   return (
     <div style={{ minHeight:"100vh", background:"#f0f4f8" }}>
@@ -474,7 +489,7 @@ function AdminPanel({ profile, tr, onBack }) {
         <div style={{ maxWidth:1080, margin:"0 auto", padding:"0 20px", display:"flex", justifyContent:"space-between", alignItems:"center", height:60 }}>
           <div style={{ display:"flex", alignItems:"center", gap:10 }}>
             <button onClick={onBack} style={{ background:"#f1f5f9", border:"none", borderRadius:8, padding:"6px 10px", cursor:"pointer", color:"#64748b", lineHeight:0 }}>{icons.back(16)}</button>
-            <span style={{ fontSize:16, fontWeight:800, color:"#1e293b", display:"flex", alignItems:"center", gap:6 }}>{icons.shield(16)} Panel de Administración</span>
+            <span style={{ fontSize:16, fontWeight:800, color:"#1e293b", display:"flex", alignItems:"center", gap:6 }}>{icons.shield(16)} {tr.adminPanelTitle}</span>
           </div>
           <div style={{ display:"flex", gap:4 }}>
             {Object.entries(TABS_ADMIN).map(([key,label])=>(
@@ -490,7 +505,7 @@ function AdminPanel({ profile, tr, onBack }) {
               <div>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
                   <h3 style={{ fontSize:17, fontWeight:700, color:"#1e293b" }}>Clientes ({clients.length})</h3>
-                  <BtnPrimary onClick={()=>{ setForm({}); setEditId(null); setModal("client"); }}>{icons.plus(14)} Nuevo cliente</BtnPrimary>
+                  <BtnPrimary onClick={()=>{ setForm({}); setEditId(null); setModal("client"); }}>{icons.plus(14)} {tr.newClient}</BtnPrimary>
                 </div>
                 <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
                   {clients.map(c=>{
@@ -515,8 +530,8 @@ function AdminPanel({ profile, tr, onBack }) {
             {tab==="consultants" && (
               <div>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
-                  <h3 style={{ fontSize:17, fontWeight:700, color:"#1e293b" }}>Consultores ({consultants.length})</h3>
-                  <BtnPrimary onClick={()=>{ setForm({ role:"consultant" }); setModal("consultant"); }}>{icons.plus(14)} Nuevo consultor</BtnPrimary>
+                  <h3 style={{ fontSize:17, fontWeight:700, color:"#1e293b" }}>{tr.tabConsultants} ({consultants.length})</h3>
+                  <BtnPrimary onClick={()=>{ setForm({ role:"consultant" }); setEditId(null); setModal("consultant"); }}>{icons.plus(14)} {tr.newConsultant}</BtnPrimary>
                 </div>
                 <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
                   {consultants.map(c=>(
@@ -528,16 +543,22 @@ function AdminPanel({ profile, tr, onBack }) {
                         <div style={{ fontWeight:700, fontSize:14, color:"#1e293b" }}>{c.name}</div>
                         <div style={{ fontSize:12, color:"#94a3b8" }}>{c.email}</div>
                       </div>
-                      <Badge label={c.role} style={{ background:c.role==="admin"?"#fef9c3":"#eff6ff", color:c.role==="admin"?"#92400e":"#2563eb", border:"none" }} />
-                      {/* Promote/demote button */}
-                      <button
-                        onClick={()=>updateRole(c.id, c.role==="admin"?"consultant":"admin")}
-                        title={c.role==="admin"?"Quitar admin":"Promover a admin"}
-                        style={{ background:c.role==="admin"?"#fff0f0":"#fffbeb", border:`1.5px solid ${c.role==="admin"?"#fecaca":"#fde68a"}`, borderRadius:8, padding:"5px 10px", cursor:"pointer", fontSize:11.5, fontWeight:700, color:c.role==="admin"?"#ef4444":"#92400e" }}
-                      >
-                        {c.role==="admin"?"− Admin":"+ Admin"}
-                      </button>
-                      <button onClick={()=>deleteConsultant(c.id)} style={{ background:"#fff0f0", border:"none", borderRadius:7, color:"#ef4444", cursor:"pointer", padding:"6px 8px", lineHeight:0 }}>{icons.trash(14)}</button>
+                      <Badge label={c.role==="admin"?tr.roleAdmin:tr.roleConsultant} style={{ background:c.role==="admin"?"#fef9c3":"#eff6ff", color:c.role==="admin"?"#92400e":"#2563eb", border:"none" }} />
+                      {/* Promote/demote */}
+                      {c.id !== profile.id && (
+                        <button onClick={()=>updateRole(c.id, c.role==="admin"?"consultant":"admin")}
+                          title={c.role==="admin"?tr.demoteTitle:tr.promoteTitle}
+                          style={{ background:c.role==="admin"?"#fff0f0":"#fffbeb", border:`1.5px solid ${c.role==="admin"?"#fecaca":"#fde68a"}`, borderRadius:8, padding:"5px 10px", cursor:"pointer", fontSize:11.5, fontWeight:700, color:c.role==="admin"?"#ef4444":"#92400e" }}>
+                          {c.role==="admin"?tr.demoteAdmin:tr.promoteAdmin}
+                        </button>
+                      )}
+                      {/* Edit */}
+                      <button onClick={()=>{ setEditId(c.id); setForm({ name:c.name, role:c.role, password:"" }); setModal("consultant"); }}
+                        style={{ background:"#eff6ff", border:"none", borderRadius:7, color:"#2563eb", cursor:"pointer", padding:"6px 8px", lineHeight:0 }}>{icons.edit(14)}</button>
+                      {/* Delete - disabled for self */}
+                      {c.id !== profile.id && (
+                        <button onClick={()=>deleteConsultant(c)} style={{ background:"#fff0f0", border:"none", borderRadius:7, color:"#ef4444", cursor:"pointer", padding:"6px 8px", lineHeight:0 }}>{icons.trash(14)}</button>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -568,11 +589,11 @@ function AdminPanel({ profile, tr, onBack }) {
             {tab==="backup" && (
               <div>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
-                  <h3 style={{ fontSize:17, fontWeight:700, color:"#1e293b" }}>Suplencias</h3>
-                  <BtnPrimary onClick={()=>{ setForm({}); setModal("backup"); }}>{icons.plus(14)} Registrar suplencia</BtnPrimary>
+                  <h3 style={{ fontSize:17, fontWeight:700, color:"#1e293b" }}>{tr.tabBackup}</h3>
+                  <BtnPrimary onClick={()=>{ setForm({}); setModal("backup"); }}>{icons.plus(14)} {tr.registerBackup}</BtnPrimary>
                 </div>
                 <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-                  {assignments.filter(a=>a.role==="backup").length===0 && <div style={{ textAlign:"center", padding:"40px 0", color:"#94a3b8" }}>No hay suplencias registradas</div>}
+                  {assignments.filter(a=>a.role==="backup").length===0 && <div style={{ textAlign:"center", padding:"40px 0", color:"#94a3b8" }}{tr.noBackups}</div>}
                   {assignments.filter(a=>a.role==="backup").map(a=>{
                     const today = new Date().toISOString().split("T")[0];
                     const active = a.backup_end >= today && a.backup_start <= today;
@@ -585,8 +606,8 @@ function AdminPanel({ profile, tr, onBack }) {
                           </div>
                         </div>
                         {active
-                          ? <Badge label="Activa" style={{ background:"#fffbeb", color:"#f59e0b", border:"1px solid #fde68a" }} />
-                          : <Badge label="Inactiva" style={{ background:"#f1f5f9", color:"#94a3b8", border:"none" }} />
+                          ? <Badge label={tr.active} style={{ background:"#fffbeb", color:"#f59e0b", border:"1px solid #fde68a" }} />
+                          : <Badge label={tr.inactive} style={{ background:"#f1f5f9", color:"#94a3b8", border:"none" }} />
                         }
                         <button onClick={()=>deleteAssignment(a.id)} style={{ background:"#fff0f0", border:"none", borderRadius:7, color:"#ef4444", cursor:"pointer", padding:"6px 8px", lineHeight:0 }}>{icons.trash(14)}</button>
                       </div>
@@ -598,7 +619,7 @@ function AdminPanel({ profile, tr, onBack }) {
             {tab==="progress" && (
               <div>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
-                  <h3 style={{ fontSize:17, fontWeight:700, color:"#1e293b" }}>Progreso de todos los clientes</h3>
+                  <h3 style={{ fontSize:17, fontWeight:700, color:"#1e293b" }}{tr.allClientsProgress}</h3>
                   <ConsolidatedReportButton clients={clients} assignments={assignments} />
                 </div>
                 <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
@@ -631,49 +652,51 @@ function AdminPanel({ profile, tr, onBack }) {
       </div>
 
       {modal==="consultant" && (
-        <Modal title="Nuevo consultor" onClose={()=>{ setModal(null); setForm({}); }}>
-          <Field label="Nombre completo"><input style={inp} placeholder="ej. Ana García" value={form.name||""} onChange={e=>setForm({ ...form, name:e.target.value })} /></Field>
-          <Field label="Email"><input style={inp} type="email" placeholder="ana@empresa.com" value={form.email||""} onChange={e=>setForm({ ...form, email:e.target.value })} /></Field>
-          <Field label="Contraseña temporal"><input style={inp} type="password" placeholder="mínimo 6 caracteres" value={form.password||""} onChange={e=>setForm({ ...form, password:e.target.value })} /></Field>
-          <Field label="Rol">
+        <Modal title={editId ? tr.editConsultant : tr.newConsultant} onClose={()=>{ setModal(null); setForm({}); setEditId(null); }}>
+          <Field label={tr.fullName}><input style={inp} placeholder="ej. Ana García" value={form.name||""} onChange={e=>setForm({ ...form, name:e.target.value })} /></Field>
+          {!editId && <Field label={tr.email}><input style={inp} type="email" placeholder="ana@empresa.com" value={form.email||""} onChange={e=>setForm({ ...form, email:e.target.value })} /></Field>}
+          <Field label={editId ? "Nueva contraseña (dejar vacío para no cambiar)" : tr.tempPassword}>
+            <input style={inp} type="password" placeholder={editId ? "••••••• (opcional)" : tr.minChars} value={form.password||""} onChange={e=>setForm({ ...form, password:e.target.value })} />
+          </Field>
+          <Field label={tr.role}>
             <select style={sel} value={form.role||"consultant"} onChange={e=>setForm({ ...form, role:e.target.value })}>
-              <option value="consultant">Consultor</option>
-              <option value="admin">Admin</option>
+              <option value="consultant">{tr.roleConsultant}</option>
+              <option value="admin">{tr.roleAdmin}</option>
             </select>
           </Field>
           <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:8 }}>
-            <BtnGhost onClick={()=>{ setModal(null); setForm({}); }}>Cancelar</BtnGhost>
-            <BtnPrimary onClick={saveConsultant} disabled={saving}>{saving?"Creando...":"Crear usuario"}</BtnPrimary>
+            <BtnGhost onClick={()=>{ setModal(null); setForm({}); setEditId(null); }}>{tr.cancel}</BtnGhost>
+            <BtnPrimary onClick={saveConsultant} disabled={saving}>{saving ? tr.saving : (editId ? tr.updateUser : tr.createUser)}</BtnPrimary>
           </div>
         </Modal>
       )}
       {modal==="client" && (
-        <Modal title={editId?"Editar cliente":"Nuevo cliente"} onClose={()=>{ setModal(null); setForm({}); setEditId(null); }}>
-          <Field label="Nombre"><input style={inp} placeholder="ej. Acme Corp" value={form.name||""} onChange={e=>setForm({ ...form, name:e.target.value, slug:e.target.value.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"") })} /></Field>
-          <Field label="Slug (URL)"><input style={inp} placeholder="ej. acme-corp" value={form.slug||""} onChange={e=>setForm({ ...form, slug:e.target.value })} /></Field>
-          <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:8 }}><BtnGhost onClick={()=>{ setModal(null); setForm({}); setEditId(null); }}>Cancelar</BtnGhost><BtnPrimary onClick={saveClient}>Guardar</BtnPrimary></div>
+        <Modal title={editId?tr.editClient:tr.newClient} onClose={()=>{ setModal(null); setForm({}); setEditId(null); }}>
+          <Field label={tr.clientName}><input style={inp} placeholder="ej. Acme Corp" value={form.name||""} onChange={e=>setForm({ ...form, name:e.target.value, slug:e.target.value.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"") })} /></Field>
+          <Field label={tr.clientSlug}><input style={inp} placeholder="ej. acme-corp" value={form.slug||""} onChange={e=>setForm({ ...form, slug:e.target.value })} /></Field>
+          <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:8 }}><BtnGhost onClick={()=>{ setModal(null); setForm({}); setEditId(null); }}>{tr.cancel}</BtnGhost><BtnPrimary onClick={saveClient}>{tr.save}</BtnPrimary></div>
         </Modal>
       )}
       {modal==="assignment" && (
-        <Modal title="Nueva asignación" onClose={()=>{ setModal(null); setForm({}); }}>
-          <Field label="Cliente"><select style={sel} value={form.client_id||""} onChange={e=>setForm({ ...form, client_id:e.target.value })}><option value="">— selecciona —</option>{clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></Field>
-          <Field label="Consultor"><select style={sel} value={form.consultant_id||""} onChange={e=>setForm({ ...form, consultant_id:e.target.value })}><option value="">— selecciona —</option>{consultants.map(c=><option key={c.id} value={c.id}>{c.name} ({c.email})</option>)}</select></Field>
+        <Modal title={tr.newAssignment} onClose={()=>{ setModal(null); setForm({}); }}>
+          <Field label={tr.tabClients}><select style={sel} value={form.client_id||""} onChange={e=>setForm({ ...form, client_id:e.target.value })}><option value="">{tr.selectOption}</option>{clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></Field>
+          <Field label={tr.tabConsultants}><select style={sel} value={form.consultant_id||""} onChange={e=>setForm({ ...form, consultant_id:e.target.value })}><option value="">{tr.selectOption}</option>{consultants.map(c=><option key={c.id} value={c.id}>{c.name} ({c.email})</option>)}</select></Field>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
-            <Field label="Rol"><select style={sel} value={form.role||"primary"} onChange={e=>setForm({ ...form, role:e.target.value })}><option value="primary">Primary</option><option value="specialist">Specialist</option></select></Field>
-            <Field label="Área (opcional)"><input style={inp} placeholder="ej. IAS/IPS" value={form.area||""} onChange={e=>setForm({ ...form, area:e.target.value })} /></Field>
+            <Field label={tr.role}><select style={sel} value={form.role||"primary"} onChange={e=>setForm({ ...form, role:e.target.value })}><option value="primary">{tr.rolePrimary}</option><option value="specialist">{tr.roleSpecialist}</option></select></Field>
+            <Field label={tr.area}><input style={inp} placeholder={tr.areaPlaceholder} value={form.area||""} onChange={e=>setForm({ ...form, area:e.target.value })} /></Field>
           </div>
-          <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:8 }}><BtnGhost onClick={()=>{ setModal(null); setForm({}); }}>Cancelar</BtnGhost><BtnPrimary onClick={saveAssignment}>Guardar</BtnPrimary></div>
+          <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:8 }}><BtnGhost onClick={()=>{ setModal(null); setForm({}); }}>{tr.cancel}</BtnGhost><BtnPrimary onClick={saveAssignment}>{tr.save}</BtnPrimary></div>
         </Modal>
       )}
       {modal==="backup" && (
-        <Modal title="Registrar suplencia" onClose={()=>{ setModal(null); setForm({}); }}>
-          <Field label="Cliente"><select style={sel} value={form.client_id||""} onChange={e=>setForm({ ...form, client_id:e.target.value })}><option value="">— selecciona —</option>{clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></Field>
-          <Field label="Suplente"><select style={sel} value={form.consultant_id||""} onChange={e=>setForm({ ...form, consultant_id:e.target.value })}><option value="">— selecciona —</option>{consultants.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></Field>
+        <Modal title={tr.registerBackup} onClose={()=>{ setModal(null); setForm({}); }}>
+          <Field label={tr.tabClients}><select style={sel} value={form.client_id||""} onChange={e=>setForm({ ...form, client_id:e.target.value })}><option value="">{tr.selectOption}</option>{clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></Field>
+          <Field label={tr.roleBackup}><select style={sel} value={form.consultant_id||""} onChange={e=>setForm({ ...form, consultant_id:e.target.value })}><option value="">{tr.selectOption}</option>{consultants.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></Field>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
-            <Field label="Fecha inicio"><input type="date" style={inp} value={form.backup_start||""} onChange={e=>setForm({ ...form, backup_start:e.target.value })} /></Field>
-            <Field label="Fecha fin"><input type="date" style={inp} value={form.backup_end||""} onChange={e=>setForm({ ...form, backup_end:e.target.value })} /></Field>
+            <Field label={tr.backupStart}><input type="date" style={inp} value={form.backup_start||""} onChange={e=>setForm({ ...form, backup_start:e.target.value })} /></Field>
+            <Field label={tr.backupEnd}><input type="date" style={inp} value={form.backup_end||""} onChange={e=>setForm({ ...form, backup_end:e.target.value })} /></Field>
           </div>
-          <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:8 }}><BtnGhost onClick={()=>{ setModal(null); setForm({}); }}>Cancelar</BtnGhost><BtnPrimary onClick={saveBackup}>Guardar</BtnPrimary></div>
+          <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:8 }}><BtnGhost onClick={()=>{ setModal(null); setForm({}); }}>{tr.cancel}</BtnGhost><BtnPrimary onClick={saveBackup}>{tr.save}</BtnPrimary></div>
         </Modal>
       )}
     </div>
@@ -695,7 +718,8 @@ function ChecklistSection({ clientId, lang, tr }) {
   const [loading, setLoading] = useState(true);
   const [collapsed, setCollapsed] = useState({});
   const [modal, setModal] = useState(false);
-  const [form, setForm] = useState({ phase:"", item_es:"", item_en:"" });
+  const [form, setForm] = useState({ phase:"", item_es:"", item_en:"", parent_id:null });
+  const pillars = PILLARS[lang] || PILLARS.es;
 
   const load = useCallback(async () => {
     const { data } = await supabase.from("client_checklist").select("*").eq("client_id",clientId).order("sort_order").order("created_at");
@@ -703,26 +727,117 @@ function ChecklistSection({ clientId, lang, tr }) {
   },[clientId]);
   useEffect(()=>{ load(); },[load]);
 
+  // Recursively collect all descendant IDs
+  const getDescendantIds = useCallback((id, allItems) => {
+    const children = allItems.filter(i=>i.parent_id===id);
+    return children.reduce((acc, c) => [...acc, c.id, ...getDescendantIds(c.id, allItems)], []);
+  }, []);
+
   const toggle = async (item) => {
-    await supabase.from("client_checklist").update({ done:!item.done }).eq("id",item.id);
-    setItems(prev=>prev.map(i=>i.id===item.id?{ ...i, done:!i.done }:i));
-  };
-  const del = async (id) => { await supabase.from("client_checklist").delete().eq("id",id); setItems(prev=>prev.filter(i=>i.id!==id)); };
-  const addItem = async () => {
-    if (!form.item_es.trim()) return;
-    const { data } = await supabase.from("client_checklist").insert({ client_id:clientId, phase:form.phase||tr.customPhase, item_es:form.item_es, item_en:form.item_en||form.item_es, done:false }).select().single();
-    if (data) setItems(prev=>[...prev,data]);
-    setModal(false); setForm({ phase:"", item_es:"", item_en:"" });
+    const newDone = !item.done;
+    const descIds = getDescendantIds(item.id, items);
+    const allIds = [item.id, ...descIds];
+    await supabase.from("client_checklist").update({ done:newDone }).in("id", allIds);
+    setItems(prev=>prev.map(i=>allIds.includes(i.id)?{ ...i, done:newDone }:i));
   };
 
-  const phases = [...new Set(items.map(i=>i.phase))];
+  const del = async (id) => {
+    const descIds = getDescendantIds(id, items);
+    await supabase.from("client_checklist").delete().eq("id",id);
+    const removeIds = new Set([id, ...descIds]);
+    setItems(prev=>prev.filter(i=>!removeIds.has(i.id)));
+  };
+
+  const openAddStep = (parentId=null, phase="") => {
+    setForm({ phase: phase||"", item_es:"", item_en:"", parent_id:parentId });
+    setModal(true);
+  };
+
+  const addItem = async () => {
+    if (!form.item_es.trim()) return;
+    const phaseValue = form.parent_id
+      ? (items.find(i=>i.id===form.parent_id)?.phase || tr.customPhase)
+      : (form.phase || tr.customPhase);
+    const { data } = await supabase.from("client_checklist").insert({
+      client_id:clientId, phase:phaseValue,
+      item_es:form.item_es, item_en:form.item_en||form.item_es,
+      done:false, parent_id:form.parent_id||null,
+    }).select().single();
+    if (data) setItems(prev=>[...prev, data]);
+    setModal(false); setForm({ phase:"", item_es:"", item_en:"", parent_id:null });
+  };
+
+  const getLabel = (it) => it ? (lang==="en" ? (it.item_en||it.item_es) : it.item_es) : "";
+  const getChildren = (parentId) => items.filter(i=>i.parent_id===parentId);
+  const rootItems = items.filter(i=>!i.parent_id);
+  const phases = [...new Set(rootItems.map(i=>i.phase))];
   const done = items.filter(i=>i.done).length;
   const pct = items.length ? Math.round((done/items.length)*100) : 0;
-  const getLabel = (it) => lang==="en" ? (it.item_en||it.item_es) : it.item_es;
+
+  // Recursive item renderer
+  const renderItem = (it, depth=0) => {
+    const children = getChildren(it.id);
+    const descIds = getDescendantIds(it.id, items);
+    const allDesc = items.filter(i=>descIds.includes(i.id));
+    const childDone = allDesc.filter(i=>i.done).length;
+    const col = PHASE_COLORS[it.phase]||{ bg:"#f1f5f9", border:"#e2e8f0", dot:"#94a3b8" };
+    const indent = 16 + depth * 20;
+    const checkSize = Math.max(16, 22 - depth * 2);
+    const fontSize = Math.max(12, 13.5 - depth * 0.5);
+    const isCollapsedItem = collapsed[it.id];
+
+    return (
+      <div key={it.id}>
+        <div style={{ display:"flex", alignItems:"center", gap:10, padding:`9px 16px 9px ${indent}px`, borderTop:`1px solid ${col.border}${depth>0?"22":"44"}`, background:it.done?(depth>0?"#f5fdf5":"#f8fff8"):(depth>0?"#fafcff":"#fff"), transition:"background 0.15s" }}>
+          {/* Vertical connector line for nested items */}
+          {depth > 0 && (
+            <div style={{ position:"absolute", left:indent-10, top:0, bottom:0, width:1, background:`${col.border}66` }} />
+          )}
+          {/* Collapse toggle if has children */}
+          {children.length > 0 ? (
+            <button onClick={()=>setCollapsed(c=>({ ...c,[it.id]:!c[it.id] }))}
+              style={{ flexShrink:0, width:14, height:14, display:"flex", alignItems:"center", justifyContent:"center", background:"none", border:"none", cursor:"pointer", color:"#94a3b8", padding:0, transform:isCollapsedItem?"rotate(-90deg)":"none", transition:"0.2s" }}>
+              {icons.chevron(12)}
+            </button>
+          ) : <div style={{ width:14, flexShrink:0 }} />}
+          {/* Checkbox */}
+          <button onClick={()=>toggle(it)} style={{ flexShrink:0, width:checkSize, height:checkSize, borderRadius:depth>0?4:6, border:`2px solid ${it.done?col.dot:"#cbd5e1"}`, background:it.done?col.bg:"transparent", display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer", color:col.dot, transition:"all 0.15s" }}>
+            {it.done && icons.check(checkSize-8)}
+          </button>
+          {/* Label */}
+          <span style={{ flex:1, fontSize, fontWeight:depth===0?600:400, color:it.done?"#94a3b8":"#334155", textDecoration:it.done?"line-through":"none" }}>{getLabel(it)}</span>
+          {/* Children counter */}
+          {children.length > 0 && (
+            <span style={{ fontSize:10, color:col.dot, fontFamily:"'DM Mono',monospace", background:col.bg, padding:"1px 6px", borderRadius:10, border:`1px solid ${col.border}`, flexShrink:0 }}>{childDone}/{allDesc.length}</span>
+          )}
+          {/* Add sub-step */}
+          <button onClick={e=>{e.stopPropagation(); openAddStep(it.id, it.phase);}}
+            title={tr.addSubStep}
+            style={{ background:"none", border:"none", color:"#bfdbfe", cursor:"pointer", fontSize:10.5, fontWeight:700, padding:"2px 3px", borderRadius:3, flexShrink:0 }}
+            onMouseEnter={e=>e.currentTarget.style.color="#2563eb"} onMouseLeave={e=>e.currentTarget.style.color="#bfdbfe"}
+          >+ sub</button>
+          {/* Delete */}
+          <button onClick={()=>del(it.id)} style={{ background:"none", border:"none", color:"#e2e8f0", cursor:"pointer", borderRadius:4, flexShrink:0, lineHeight:0 }}
+            onMouseEnter={e=>e.currentTarget.style.color="#ef4444"} onMouseLeave={e=>e.currentTarget.style.color="#e2e8f0"}
+          >{icons.trash(depth>0?11:13)}</button>
+        </div>
+        {/* Render children recursively */}
+        {!isCollapsedItem && children.map(child=>renderItem(child, depth+1))}
+      </div>
+    );
+  };
+
+  // Count all descendants for phase (recursive)
+  const countPhaseItems = (phase) => {
+    const roots = rootItems.filter(i=>i.phase===phase);
+    const allIds = roots.flatMap(r=>[r.id, ...getDescendantIds(r.id, items)]);
+    return items.filter(i=>allIds.includes(i.id));
+  };
 
   if (loading) return <Spinner />;
   return (
     <div>
+      {/* Progress bar */}
       <div style={{ background:"#fff", border:"1.5px solid #e2e8f0", borderRadius:14, padding:"18px 22px", marginBottom:20 }}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
           <span style={{ fontSize:13.5, fontWeight:600, color:"#334155" }}>{tr.progress}</span>
@@ -732,43 +847,66 @@ function ChecklistSection({ clientId, lang, tr }) {
           <div style={{ height:"100%", width:`${pct}%`, background:"linear-gradient(90deg,#0ea5e9,#2563eb)", borderRadius:4, transition:"width 0.5s ease" }} />
         </div>
       </div>
-      {items.length===0 && <div style={{ textAlign:"center", padding:"40px 0", color:"#94a3b8" }}>No hay pasos. Agrega el primero.</div>}
+
+      {rootItems.length===0 && <div style={{ textAlign:"center", padding:"40px 0", color:"#94a3b8" }}>{tr.noStepsYet}</div>}
+
       {phases.map(phase=>{
-        const phaseItems = items.filter(i=>i.phase===phase);
-        const phaseDone = phaseItems.filter(i=>i.done).length;
+        const allPhaseItems = countPhaseItems(phase);
+        const phaseDone = allPhaseItems.filter(i=>i.done).length;
         const col = PHASE_COLORS[phase]||{ bg:"#f1f5f9", border:"#e2e8f0", dot:"#94a3b8" };
         const isCollapsed = collapsed[phase];
+
         return (
-          <div key={phase} style={{ marginBottom:14, border:`1.5px solid ${col.border}`, borderRadius:12, overflow:"hidden", background:"#fff" }}>
+          <div key={phase} style={{ marginBottom:14, border:`1.5px solid ${col.border}`, borderRadius:12, overflow:"hidden", background:"#fff", position:"relative" }}>
+            {/* Phase header */}
             <div onClick={()=>setCollapsed(c=>({ ...c,[phase]:!c[phase] }))} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"12px 16px", background:col.bg, cursor:"pointer" }}>
               <div style={{ display:"flex", alignItems:"center", gap:10 }}>
                 <div style={{ width:10, height:10, borderRadius:"50%", background:col.dot }} />
                 <span style={{ fontWeight:700, fontSize:14, color:"#1e293b" }}>{phase}</span>
-                <span style={{ fontSize:12, color:col.dot, fontFamily:"'DM Mono',monospace", background:"#fff", padding:"1px 8px", borderRadius:20, border:`1px solid ${col.border}` }}>{phaseDone}/{phaseItems.length}</span>
+                <span style={{ fontSize:12, color:col.dot, fontFamily:"'DM Mono',monospace", background:"#fff", padding:"1px 8px", borderRadius:20, border:`1px solid ${col.border}` }}>{phaseDone}/{allPhaseItems.length}</span>
               </div>
               <span style={{ color:"#94a3b8", transform:isCollapsed?"rotate(-90deg)":"none", transition:"0.2s" }}>{icons.chevron(16)}</span>
             </div>
-            {!isCollapsed && phaseItems.map(it=>(
-              <div key={it.id} style={{ display:"flex", alignItems:"center", gap:12, padding:"11px 16px", borderTop:`1px solid ${col.border}44`, background:it.done?"#f8fff8":"#fff" }}>
-                <button onClick={()=>toggle(it)} style={{ flexShrink:0, width:22, height:22, borderRadius:6, border:`2px solid ${it.done?col.dot:"#cbd5e1"}`, background:it.done?col.bg:"transparent", display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer", color:col.dot }}>
-                  {it.done && icons.check(12)}
-                </button>
-                <span style={{ flex:1, fontSize:13.5, color:it.done?"#94a3b8":"#334155", textDecoration:it.done?"line-through":"none" }}>{getLabel(it)}</span>
-                <button onClick={()=>del(it.id)} style={{ background:"none", border:"none", color:"#e2e8f0", cursor:"pointer", borderRadius:4 }}
-                  onMouseEnter={e=>e.currentTarget.style.color="#ef4444"} onMouseLeave={e=>e.currentTarget.style.color="#e2e8f0"}
-                >{icons.trash(13)}</button>
-              </div>
-            ))}
+
+            {!isCollapsed && (
+              <>
+                {rootItems.filter(i=>i.phase===phase).map(it=>renderItem(it, 0))}
+                <div style={{ padding:"8px 16px", borderTop:`1px solid ${col.border}22` }}>
+                  <button onClick={()=>openAddStep(null, phase)}
+                    style={{ display:"inline-flex", alignItems:"center", gap:5, background:"transparent", border:"none", color:col.dot, cursor:"pointer", fontSize:12.5, fontWeight:600, padding:"4px 0" }}>
+                    {icons.plus(12)} {tr.addStep}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         );
       })}
-      <BtnAdd onClick={()=>setModal(true)}>{tr.addStep}</BtnAdd>
+
+      <BtnAdd onClick={()=>openAddStep(null, "")}>{tr.addStep}</BtnAdd>
+
       {modal && (
-        <Modal title={tr.addActivationStep} onClose={()=>setModal(false)}>
-          <Field label={tr.phase}><input style={inp} placeholder={tr.enterPhase} value={form.phase} onChange={e=>setForm({ ...form, phase:e.target.value })} /></Field>
-          <Field label={`${tr.stepDescription} (ES)`}><input style={inp} placeholder={tr.enterStep} value={form.item_es} onChange={e=>setForm({ ...form, item_es:e.target.value })} /></Field>
+        <Modal title={form.parent_id ? tr.addSubStep : tr.addActivationStep} onClose={()=>setModal(false)}>
+          {!form.parent_id && (
+            <Field label={tr.phase}>
+              <select style={sel} value={form.phase} onChange={e=>setForm({ ...form, phase:e.target.value })}>
+                <option value="">{tr.enterPhase}</option>
+                {pillars.map(p=><option key={p.key} value={p.key}>{p.label}</option>)}
+                <option value={tr.customPhase}>{tr.customPhase}</option>
+              </select>
+            </Field>
+          )}
+          {form.parent_id && (
+            <div style={{ background:"#eff6ff", border:"1px solid #bfdbfe", borderRadius:8, padding:"8px 12px", marginBottom:14, fontSize:12.5, color:"#2563eb" }}>
+              📎 {tr.parentStep}: <strong>{getLabel(items.find(i=>i.id===form.parent_id))}</strong>
+            </div>
+          )}
+          <Field label={`${tr.stepDescription} (ES)`}><input style={inp} autoFocus placeholder={tr.enterStep} value={form.item_es} onChange={e=>setForm({ ...form, item_es:e.target.value })} /></Field>
           <Field label={`${tr.stepDescription} (EN)`}><input style={inp} placeholder={tr.enterStep} value={form.item_en} onChange={e=>setForm({ ...form, item_en:e.target.value })} /></Field>
-          <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:8 }}><BtnGhost onClick={()=>setModal(false)}>{tr.cancel}</BtnGhost><BtnPrimary onClick={addItem}>{tr.save}</BtnPrimary></div>
+          <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:8 }}>
+            <BtnGhost onClick={()=>setModal(false)}>{tr.cancel}</BtnGhost>
+            <BtnPrimary onClick={addItem}>{tr.save}</BtnPrimary>
+          </div>
         </Modal>
       )}
     </div>
@@ -1051,11 +1189,20 @@ function ServiceRequestsSection({ clientId, lang, tr }) {
   };
   const del = async (id) => { await supabase.from("client_service_requests").delete().eq("id", id); setSrs(prev => prev.filter(s => s.id!==id)); };
 
-  const SR_STATUS = ["Abierto","En progreso","Resuelto","Cerrado"];
-  const SR_PRIORITY = ["Alta","Media","Baja"];
+  const SR_STATUS_ES = ["Abierto","En progreso","Resuelto","Cerrado"];
+  const SR_STATUS_EN = ["Open","In Progress","Resolved","Closed"];
+  const SR_PRIORITY_ES = ["Alta","Media","Baja"];
+  const SR_PRIORITY_EN = ["High","Medium","Low"];
+  // Always store in Spanish internally, display translated
+  const SR_STATUS = SR_STATUS_ES;
+  const SR_PRIORITY = SR_PRIORITY_ES;
+  const SR_DISPLAY_STATUS = lang==="en" ? SR_STATUS_EN : SR_STATUS_ES;
+  const SR_DISPLAY_PRIORITY = lang==="en" ? SR_PRIORITY_EN : SR_PRIORITY_ES;
   const statusColor = { "Abierto":{ bg:"#fffbeb",text:"#f59e0b",border:"#fde68a" }, "En progreso":{ bg:"#eff6ff",text:"#2563eb",border:"#bfdbfe" }, "Resuelto":{ bg:"#f0fdf4",text:"#16a34a",border:"#86efac" }, "Cerrado":{ bg:"#f1f5f9",text:"#64748b",border:"#e2e8f0" } };
   const priColor = { "Alta":{ bg:"#fff0f0",text:"#ef4444",border:"#fecaca" }, "Media":{ bg:"#fffbeb",text:"#f59e0b",border:"#fde68a" }, "Baja":{ bg:"#f0fdf4",text:"#16a34a",border:"#86efac" } };
   const openCount = srs.filter(s=>s.status==="Abierto"||s.status==="En progreso").length;
+  const displayStatus = (s) => { const idx=SR_STATUS_ES.indexOf(s); return idx>=0?SR_DISPLAY_STATUS[idx]:s; };
+  const displayPriority = (p) => { const idx=SR_PRIORITY_ES.indexOf(p); return idx>=0?SR_DISPLAY_PRIORITY[idx]:p; };
 
   if (loading) return <Spinner />;
   return (
@@ -1064,9 +1211,9 @@ function ServiceRequestsSection({ clientId, lang, tr }) {
       <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12, marginBottom:20 }}>
         {[
           { label:"Total SRs", val:srs.length, color:"#2563eb" },
-          { label:"Abiertos", val:srs.filter(s=>s.status==="Abierto").length, color:"#f59e0b" },
-          { label:"En progreso", val:srs.filter(s=>s.status==="En progreso").length, color:"#2563eb" },
-          { label:"Resueltos/Cerrados", val:srs.filter(s=>s.status==="Resuelto"||s.status==="Cerrado").length, color:"#16a34a" },
+          { label:lang==="en"?"Open":"Abiertos", val:srs.filter(s=>s.status==="Abierto").length, color:"#f59e0b" },
+          { label:lang==="en"?"In Progress":"En progreso", val:srs.filter(s=>s.status==="En progreso").length, color:"#2563eb" },
+          { label:lang==="en"?"Resolved/Closed":"Resueltos/Cerrados", val:srs.filter(s=>s.status==="Resuelto"||s.status==="Cerrado").length, color:"#16a34a" },
         ].map(b=>(
           <div key={b.label} style={{ background:"#fff", border:"1.5px solid #e2e8f0", borderRadius:12, padding:"14px 16px" }}>
             <div style={{ fontSize:22, fontWeight:800, color:b.color, fontFamily:"'DM Mono',monospace" }}>{b.val}</div>
@@ -1074,10 +1221,10 @@ function ServiceRequestsSection({ clientId, lang, tr }) {
           </div>
         ))}
       </div>
-      {openCount > 0 && <div style={{ background:"#fffbeb", border:"1.5px solid #fde68a", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#92400e", display:"flex", alignItems:"center", gap:8 }}>⚠️ <strong>{openCount}</strong> SR(s) pendientes de resolución</div>}
+      {openCount > 0 && <div style={{ background:"#fffbeb", border:"1.5px solid #fde68a", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:13, color:"#92400e", display:"flex", alignItems:"center", gap:8 }}>⚠️ <strong>{openCount}</strong> SR(s) {lang==="en"?"pending resolution":tr.srPending}</div>}
 
       <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-        {srs.length===0 && <div style={{ textAlign:"center", padding:"40px 0", color:"#94a3b8" }}>No hay SRs registrados. Agrega el primero.</div>}
+        {srs.length===0 && <div style={{ textAlign:"center", padding:"40px 0", color:"#94a3b8" }}>{lang==="en"?"No SRs registered. Add the first one.":"No hay SRs registrados. Agrega el primero."}</div>}
         {srs.map(sr=>{
           const sc = statusColor[sr.status]||statusColor["Abierto"];
           const pc = priColor[sr.priority]||priColor["Media"];
@@ -1091,8 +1238,8 @@ function ServiceRequestsSection({ clientId, lang, tr }) {
                   <span style={{ fontSize:14, fontWeight:600, color:"#1e293b" }}>{sr.title}</span>
                 </div>
                 <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
-                  <Badge label={sr.priority} style={{ background:pc.bg, color:pc.text, border:`1px solid ${pc.border}` }} />
-                  <Badge label={sr.status} style={{ background:sc.bg, color:sc.text, border:`1px solid ${sc.border}` }} />
+                  <Badge label={displayPriority(sr.priority)} style={{ background:pc.bg, color:pc.text, border:`1px solid ${pc.border}` }} />
+                  <Badge label={displayStatus(sr.status)} style={{ background:sc.bg, color:sc.text, border:`1px solid ${sc.border}` }} />
                   {sr.notes && <span style={{ fontSize:12, color:"#94a3b8" }}>{sr.notes}</span>}
                 </div>
               </div>
@@ -1104,16 +1251,16 @@ function ServiceRequestsSection({ clientId, lang, tr }) {
           );
         })}
       </div>
-      <BtnAdd onClick={()=>{ setEditing(null); setForm(emptySR); setModal(true); }}>Agregar SR</BtnAdd>
+      <BtnAdd onClick={()=>{ setEditing(null); setForm(emptySR); setModal(true); }}>{tr.addSR}</BtnAdd>
       {modal && (
-        <Modal title={editing?"Editar SR":"Nuevo SR de ServiceNow"} onClose={()=>setModal(false)}>
-          <Field label="Número de SR"><input style={inp} placeholder="ej. REQ0012345" value={form.sr_number} onChange={e=>setForm({ ...form, sr_number:e.target.value })} /></Field>
-          <Field label="Título / Descripción"><input style={inp} placeholder="ej. Activación de Joule en tenant BTP" value={form.title} onChange={e=>setForm({ ...form, title:e.target.value })} /></Field>
+        <Modal title={editing?tr.editSR:tr.newSR} onClose={()=>setModal(false)}>
+          <Field label={tr.srNumber}><input style={inp} placeholder="ej. REQ0012345" value={form.sr_number} onChange={e=>setForm({ ...form, sr_number:e.target.value })} /></Field>
+          <Field label={tr.srTitle}><input style={inp} placeholder="ej. Activación de Joule en tenant BTP" value={form.title} onChange={e=>setForm({ ...form, title:e.target.value })} /></Field>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
-            <Field label="Prioridad"><select style={sel} value={form.priority} onChange={e=>setForm({ ...form, priority:e.target.value })}>{SR_PRIORITY.map(p=><option key={p}>{p}</option>)}</select></Field>
-            <Field label="Estado"><select style={sel} value={form.status} onChange={e=>setForm({ ...form, status:e.target.value })}>{SR_STATUS.map(s=><option key={s}>{s}</option>)}</select></Field>
+            <Field label={tr.priority}><select style={sel} value={form.priority} onChange={e=>setForm({ ...form, priority:e.target.value })}>{SR_PRIORITY.map((p,i)=><option key={p} value={p}>{SR_DISPLAY_PRIORITY[i]}</option>)}</select></Field>
+            <Field label={tr.status}><select style={sel} value={form.status} onChange={e=>setForm({ ...form, status:e.target.value })}>{SR_STATUS.map((s,i)=><option key={s} value={s}>{SR_DISPLAY_STATUS[i]}</option>)}</select></Field>
           </div>
-          <Field label="Notas"><input style={inp} placeholder="Observaciones adicionales" value={form.notes||""} onChange={e=>setForm({ ...form, notes:e.target.value })} /></Field>
+          <Field label={tr.srNotes}><input style={inp} placeholder={lang==="en"?"Additional notes":"Observaciones adicionales"} value={form.notes||""} onChange={e=>setForm({ ...form, notes:e.target.value })} /></Field>
           <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:8 }}><BtnGhost onClick={()=>setModal(false)}>{tr.cancel}</BtnGhost><BtnPrimary onClick={save}>{tr.save}</BtnPrimary></div>
         </Modal>
       )}

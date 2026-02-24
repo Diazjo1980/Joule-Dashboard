@@ -44,6 +44,12 @@ export const PHASE_COLORS = {
   "ariba":          { bg: "#f3eeff", border: "#d0baff", icon: "#7c3aed", dot: "#7c3aed" },
   "Validación":     { bg: "#fff4e8", border: "#ffd4a0", icon: "#f57c00", dot: "#f57c00" },
   "validation":     { bg: "#fff4e8", border: "#ffd4a0", icon: "#f57c00", dot: "#f57c00" },
+  // SAP Pillars
+  "Discover":       { bg: "#e8f4fd", border: "#bbd6f0", icon: "#2196f3", dot: "#2196f3" },
+  "Prepare":        { bg: "#e8f8f0", border: "#b2dfc9", icon: "#22a861", dot: "#22a861" },
+  "Explore":        { bg: "#f3eeff", border: "#d0baff", icon: "#7c3aed", dot: "#7c3aed" },
+  "Realize":        { bg: "#fff4e8", border: "#ffd4a0", icon: "#f57c00", dot: "#f57c00" },
+  "Deploy/Run":     { bg: "#fdf2f8", border: "#f0abdb", icon: "#db2777", dot: "#db2777" },
 };
 
 export const PRIORITY_COLORS = {
