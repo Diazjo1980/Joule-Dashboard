@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./lib/supabase";
 import { generateClientPDF } from "./lib/pdfReport";
+import { applyTemplateToClient } from "./lib/checklistTemplate";
 import t, { PILLARS } from "./i18n";
 import { PHASE_COLORS, PRIORITY_COLORS, STATUS_COLORS } from "./data";
 
@@ -394,6 +395,17 @@ function AdminPanel({ profile, tr, onBack }) {
   const [form, setForm] = useState({});
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [applyingTemplate, setApplyingTemplate] = useState(null); // clientId being processed
+
+  const applyTemplate = async (clientId, clientName) => {
+    if (!window.confirm(`Aplicar template estándar a "${clientName}"?\n\nSe agregarán los pasos que aún no existan. Los existentes no serán modificados.`)) return;
+    setApplyingTemplate(clientId);
+    try {
+      const count = await applyTemplateToClient(clientId, supabase);
+      alert(`✅ Template aplicado: ${count} paso(s) agregado(s).`);
+    } catch(e) { alert("Error aplicando template: " + e.message); }
+    setApplyingTemplate(null);
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -409,8 +421,15 @@ function AdminPanel({ profile, tr, onBack }) {
   const saveClient = async () => {
     if (!form.name?.trim()) return;
     const slug = (form.slug || form.name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,""));
-    if (editId) await supabase.from("clients").update({ name:form.name, slug }).eq("id",editId);
-    else await supabase.from("clients").insert({ name:form.name, slug });
+    if (editId) {
+      await supabase.from("clients").update({ name:form.name, slug }).eq("id",editId);
+    } else {
+      const { data: newClient } = await supabase.from("clients").insert({ name:form.name, slug }).select().single();
+      // Auto-apply template to new client
+      if (newClient?.id) {
+        try { await applyTemplateToClient(newClient.id, supabase); } catch(e) { console.warn("Template apply failed:", e); }
+      }
+    }
     setModal(null); setForm({}); setEditId(null); load();
   };
 
@@ -516,8 +535,16 @@ function AdminPanel({ profile, tr, onBack }) {
                           <div style={{ fontWeight:700, fontSize:15, color:"#1e293b" }}>{c.name}</div>
                           <div style={{ fontSize:12, color:"#94a3b8", fontFamily:"'DM Mono', monospace" }}>?client={c.slug}</div>
                         </div>
-                        <div style={{ fontSize:12, color:"#64748b" }}>{assigned.length} consultor(es)</div>
+                        <div style={{ fontSize:12, color:"#64748b" }}>{assigned.length} {tr.consultantCount}</div>
                         <div style={{ display:"flex", gap:6 }}>
+                          {/* Apply template button */}
+                          <button
+                            onClick={()=>applyTemplate(c.id, c.name)}
+                            disabled={applyingTemplate===c.id}
+                            title="Aplicar template estándar"
+                            style={{ background:"#f0fdf4", border:"1.5px solid #86efac", borderRadius:7, color:"#16a34a", cursor:"pointer", padding:"5px 10px", fontSize:11, fontWeight:700, display:"flex", alignItems:"center", gap:4 }}>
+                            {applyingTemplate===c.id ? "⏳" : "📋"} Template
+                          </button>
                           <button onClick={()=>{ setForm({ name:c.name, slug:c.slug }); setEditId(c.id); setModal("client"); }} style={{ background:"#eff6ff", border:"none", borderRadius:7, color:"#2563eb", cursor:"pointer", padding:"6px 8px", lineHeight:0 }}>{icons.edit(14)}</button>
                           <button onClick={()=>deleteClient(c.id)} style={{ background:"#fff0f0", border:"none", borderRadius:7, color:"#ef4444", cursor:"pointer", padding:"6px 8px", lineHeight:0 }}>{icons.trash(14)}</button>
                         </div>

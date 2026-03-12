@@ -170,6 +170,11 @@ const t = {
     pdfReport: "Reporte PDF",
     noChecklistItems: "Sin checklist",
     noClientsYet: "No hay clientes creados aún",
+    applyTemplate: "Aplicar Template",
+    applyTemplateConfirm: "Aplicar template estándar al cliente",
+    templateApplied: "Template aplicado",
+    stepsAdded: "paso(s) agregado(s)",
+    applying: "Aplicando...",
 
     // Roles display
     roleLabelPrimary: "Primary",
@@ -343,6 +348,11 @@ const t = {
     pdfReport: "PDF Report",
     noChecklistItems: "No checklist",
     noClientsYet: "No clients created yet",
+    applyTemplate: "Apply Template",
+    applyTemplateConfirm: "Apply standard template to client",
+    templateApplied: "Template applied",
+    stepsAdded: "step(s) added",
+    applying: "Applying...",
 
     // Roles display
     roleLabelPrimary: "Primary",
