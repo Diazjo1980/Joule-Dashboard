@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./lib/supabase";
-import { generateClientPDF } from "./lib/pdfReport";
+import { generateClientPDF, generateConsolidatedPDF } from "./lib/pdfReport";
 import { applyTemplateToClient } from "./lib/checklistTemplate";
 import t, { PILLARS } from "./i18n";
 import { PHASE_COLORS, PRIORITY_COLORS, STATUS_COLORS } from "./data";
@@ -22,6 +22,8 @@ const icons = {
   logout: (s=16) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>,
   back: (s=16) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>,
   shield: (s=16) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>,
+  file: (s=16) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>,
+  upload: (s=16) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>,
 };
 
 const Badge = ({ label, style: s }) => (
@@ -221,135 +223,7 @@ function ConsolidatedReportButton({ clients, assignments }) {
         return { client, consultants, checklist:checklist||[], tasks:tasks||[], resources:resources||[], serviceRequests:serviceRequests||[] };
       }));
 
-      // Build consolidated PDF manually
-      const { jsPDF } = await import("jspdf");
-      const doc = new jsPDF({ orientation:"portrait", unit:"mm", format:"a4" });
-      const W=210, M=18, CW=W-M*2;
-
-      // Cover page
-      doc.setFillColor(37,99,235); doc.rect(0,0,W,50,"F");
-      doc.setTextColor(255,255,255);
-      doc.setFontSize(22); doc.setFont("helvetica","bold"); doc.text("Joule × Ariba",M,22);
-      doc.setFontSize(12); doc.setFont("helvetica","normal"); doc.text("Reporte Consolidado de Activación",M,32);
-      doc.setFontSize(9); doc.text(new Date().toLocaleDateString("es-MX",{year:"numeric",month:"long",day:"numeric"}),M,42);
-      doc.setFontSize(10); doc.setFont("helvetica","bold"); doc.text(`${clients.length} clientes`,W-M,42,{align:"right"});
-
-      let y = 60;
-      // Summary table header
-      doc.setFontSize(11); doc.setFont("helvetica","bold"); doc.setTextColor(15,23,42);
-      doc.text("Resumen de Clientes", M, y); y+=7;
-      doc.setFillColor(37,99,235); doc.rect(M,y,CW,7,"F");
-      doc.setFontSize(7.5); doc.setFont("helvetica","bold"); doc.setTextColor(255,255,255);
-      doc.text("Cliente",M+3,y+5); doc.text("Consultor",M+55,y+5); doc.text("Checklist",M+105,y+5);
-      doc.text("Tareas",M+130,y+5); doc.text("SRs",M+152,y+5); doc.text("Estado",M+165,y+5);
-      y+=8;
-
-      clientsData.forEach(({ client:c, consultants:cons, checklist, tasks, serviceRequests }, idx) => {
-        if (y>265) { doc.addPage(); y=20; }
-        const pct = checklist.length ? Math.round(checklist.filter(i=>i.done).length/checklist.length*100) : 0;
-        const doneT = tasks.filter(t=>t.status==="Completado").length;
-        const openSR = serviceRequests.filter(s=>s.status==="Abierto"||s.status==="En progreso").length;
-        const primary = cons.find(a=>a.role==="primary");
-        const statusText = pct===100?"Completo":pct>=50?"En Progreso":"Iniciando";
-        const statusCol = pct===100?[22,163,74]:pct>=50?[37,99,235]:[245,158,11];
-        if(idx%2===0){doc.setFillColor(248,250,252);doc.rect(M,y-4,CW,7,"F");}
-        doc.setFontSize(8); doc.setFont("helvetica","bold"); doc.setTextColor(15,23,42);
-        doc.text(c.name,M+3,y);
-        doc.setFont("helvetica","normal"); doc.setTextColor(100,116,139);
-        doc.text(primary?.profiles?.name||"—",M+55,y);
-        // progress bar
-        doc.setFillColor(226,232,240); doc.rect(M+105,y-3,20,2.5,"F");
-        doc.setFillColor(37,99,235); doc.rect(M+105,y-3,20*(pct/100),2.5,"F");
-        doc.setTextColor(37,99,235); doc.setFontSize(7); doc.text(`${pct}%`,M+127,y);
-        doc.setFontSize(8); doc.setTextColor(15,23,42); doc.text(`${doneT}/${tasks.length}`,M+130,y);
-        doc.setTextColor(...(openSR>0?[245,158,11]:[22,163,74])); doc.text(`${serviceRequests.length}`,M+152,y);
-        doc.setFont("helvetica","bold"); doc.setTextColor(...statusCol); doc.text(statusText,M+165,y);
-        y+=7;
-      });
-
-      // Detail section per client
-      for (const { client:c, consultants:cons, checklist, tasks, serviceRequests, resources } of clientsData) {
-        doc.addPage(); y=0;
-        // Client header
-        doc.setFillColor(37,99,235); doc.rect(0,0,W,28,"F");
-        doc.setTextColor(255,255,255); doc.setFontSize(14); doc.setFont("helvetica","bold"); doc.text(c.name,M,16);
-        doc.setFontSize(8); doc.setFont("helvetica","normal");
-        const primary=cons.find(a=>a.role==="primary");
-        if(primary) doc.text(`Consultor: ${primary.profiles?.name}`,M,23);
-        y=36;
-
-        // Mini summary
-        const pct=checklist.length?Math.round(checklist.filter(i=>i.done).length/checklist.length*100):0;
-        doc.setFontSize(8); doc.setFont("helvetica","normal"); doc.setTextColor(100,116,139);
-        doc.text(`Checklist: ${checklist.filter(i=>i.done).length}/${checklist.length} (${pct}%)  ·  Tareas completadas: ${tasks.filter(t=>t.status==="Completado").length}/${tasks.length}  ·  SRs: ${serviceRequests.length}`,M,y);
-        y+=10;
-
-        // Checklist phases
-        const sectionH = (t2) => {
-          if(y>260){doc.addPage();y=20;}
-          doc.setFillColor(37,99,235); doc.rect(M,y,CW,7,"F");
-          doc.setFontSize(9); doc.setFont("helvetica","bold"); doc.setTextColor(255,255,255); doc.text(t2,M+3,y+5); y+=10;
-        };
-        sectionH("CHECKLIST POR FASE");
-        const phases=[...new Set(checklist.map(i=>i.phase))];
-        phases.forEach(phase=>{
-          const items=checklist.filter(i=>i.phase===phase);
-          const done=items.filter(i=>i.done).length;
-          if(y>260){doc.addPage();y=20;}
-          doc.setFillColor(240,244,248); doc.rect(M,y,CW,7,"F");
-          doc.setFontSize(8); doc.setFont("helvetica","bold"); doc.setTextColor(15,23,42); doc.text(phase,M+3,y+5);
-          doc.setTextColor(37,99,235); doc.text(`${done}/${items.length}`,W-M-3,y+5,{align:"right"});
-          y+=9;
-          items.forEach(item=>{
-            if(y>268){doc.addPage();y=20;}
-            const label=item.item_es;
-            if(item.done){doc.setFillColor(22,163,74);doc.rect(M+3,y-3.5,4,4,"F");doc.setTextColor(255,255,255);doc.setFontSize(6);doc.text("✓",M+3.8,y-0.5);}
-            else{doc.setDrawColor(226,232,240);doc.rect(M+3,y-3.5,4,4,"S");}
-            doc.setFontSize(7.5); doc.setFont("helvetica","normal");
-            doc.setTextColor(item.done?100:15,item.done?116:23,item.done?139:42);
-            const lines=doc.splitTextToSize(label,CW-12); doc.text(lines,M+9,y); y+=lines.length*4.5+0.5;
-          });
-          y+=2;
-        });
-
-        // SRs
-        if(serviceRequests.length>0){
-          sectionH("SERVICE REQUESTS — ServiceNow");
-          serviceRequests.forEach((sr,idx)=>{
-            if(y>268){doc.addPage();y=20;}
-            if(idx%2===0){doc.setFillColor(248,250,252);doc.rect(M,y-4,CW,6.5,"F");}
-            doc.setFontSize(7.5); doc.setFont("helvetica","bold"); doc.setTextColor(37,99,235); doc.text(sr.sr_number||"",M+3,y);
-            doc.setFont("helvetica","normal"); doc.setTextColor(15,23,42); doc.text(doc.splitTextToSize(sr.title||"",100)[0],M+28,y);
-            doc.setTextColor(100,116,139); doc.text(sr.priority||"",M+140,y); doc.text(sr.status||"",M+160,y);
-            y+=6.5;
-          });
-          y+=3;
-        }
-
-        // Tasks
-        if(tasks.length>0){
-          sectionH("TAREAS");
-          tasks.forEach((task,idx)=>{
-            if(y>268){doc.addPage();y=20;}
-            if(idx%2===0){doc.setFillColor(248,250,252);doc.rect(M,y-4,CW,6.5,"F");}
-            doc.setFontSize(7.5); doc.setFont("helvetica","normal"); doc.setTextColor(15,23,42);
-            doc.text(doc.splitTextToSize(task.title_es||"",90)[0],M+3,y);
-            doc.setTextColor(100,116,139); doc.text(task.priority||"",M+105,y); doc.text(task.status||"",M+130,y);
-            if(task.due) doc.text(task.due,M+163,y);
-            y+=6.5;
-          });
-        }
-      }
-
-      // Page numbers
-      const total=doc.internal.getNumberOfPages();
-      for(let i=1;i<=total;i++){
-        doc.setPage(i); doc.setFillColor(226,232,240); doc.rect(0,285,W,12,"F");
-        doc.setFontSize(7); doc.setFont("helvetica","normal"); doc.setTextColor(100,116,139);
-        doc.text("Joule × Ariba — Reporte Consolidado",M,291);
-        doc.text(`${i} / ${total}`,W-M,291,{align:"right"});
-      }
-
+      const doc = await generateConsolidatedPDF({ clients: clientsData, lang: "es" });
       doc.save(`joule-ariba-reporte-consolidado-${new Date().toISOString().slice(0,10)}.pdf`);
     } catch(e) { alert("Error: " + e.message); }
     setLoading(false);
@@ -385,6 +259,30 @@ function ClientProgressBadge({ clientId }) {
 }
 
 // ── ADMIN PANEL ───────────────────────────────────────────────────────────────
+function AdminConfigTab({ tr }) {
+  const [url, setUrl] = useState(() => { try { return localStorage.getItem(MS_WEBHOOK_KEY)||""; } catch { return ""; } });
+  const [saved, setSaved] = useState(false);
+  const save = () => {
+    try { localStorage.setItem(MS_WEBHOOK_KEY, url.trim()); } catch {}
+    setSaved(true); setTimeout(() => setSaved(false), 2500);
+  };
+  return (
+    <div style={{ maxWidth:600 }}>
+      <h3 style={{ fontSize:17, fontWeight:700, color:"#1e293b", marginBottom:6 }}>Microsoft List — Power Automate</h3>
+      <p style={{ fontSize:13, color:"#64748b", marginBottom:16, lineHeight:1.6 }}>
+        Crea un Flow en Power Automate con trigger <strong>"When an HTTP request is received"</strong>, configura la MS List como destino y pega la URL aquí. La app enviará un POST con: <code>client_id</code>, <code>client_name</code>, <code>notes</code>, <code>last_updated</code>.
+      </p>
+      <Field label={tr.msListWebhookUrl}>
+        <input style={inp} placeholder={tr.msListWebhookPlaceholder} value={url} onChange={e=>{ setUrl(e.target.value); setSaved(false); }} />
+      </Field>
+      <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:10 }}>
+        <BtnPrimary onClick={save}>{tr.msListWebhookSave}</BtnPrimary>
+        {saved && <span style={{ color:"#16a34a", fontSize:13, fontWeight:600 }}>✓ {tr.msListWebhookSaved}</span>}
+      </div>
+    </div>
+  );
+}
+
 function AdminPanel({ profile, tr, onBack }) {
   const [tab, setTab] = useState("clients");
   const [clients, setClients] = useState([]);
@@ -485,8 +383,11 @@ function AdminPanel({ profile, tr, onBack }) {
   };
 
   const updateRole = async (userId, role) => {
-    try { await callAdminFn("update_role", { userId, role }); load(); }
-    catch(e) { alert(e.message); }
+    try {
+      const { error } = await supabase.from("profiles").update({ role }).eq("id", userId);
+      if (error) throw new Error(error.message);
+      load();
+    } catch(e) { alert(e.message); }
   };
 
   // Fix: delete admin - use service role via Netlify fn, works for any role
@@ -500,7 +401,7 @@ function AdminPanel({ profile, tr, onBack }) {
   };
 
   const tabStyle = (key) => ({ padding:"8px 18px", borderRadius:8, border:"none", cursor:"pointer", fontWeight:700, fontSize:13, fontFamily:"'DM Sans', sans-serif", background:tab===key?"linear-gradient(135deg,#0ea5e9,#2563eb)":"transparent", color:tab===key?"#fff":"#64748b" });
-  const TABS_ADMIN = { clients: tr.tabClients, consultants: tr.tabConsultants, assignments: tr.tabAssignments, backup: tr.tabBackup, progress: tr.tabProgress };
+  const TABS_ADMIN = { clients: tr.tabClients, consultants: tr.tabConsultants, assignments: tr.tabAssignments, backup: tr.tabBackup, progress: tr.tabProgress, config: tr.msListTabAdmin };
 
   return (
     <div style={{ minHeight:"100vh", background:"#f0f4f8" }}>
@@ -674,6 +575,7 @@ function AdminPanel({ profile, tr, onBack }) {
                 </div>
               </div>
             )}
+            {tab==="config" && <AdminConfigTab tr={tr} />}
           </>
         )}
       </div>
@@ -1029,7 +931,15 @@ function TasksSection({ clientId, lang, tr }) {
 }
 
 // ── RESOURCES ─────────────────────────────────────────────────────────────────
-const emptyDoc = { title:"", url:"", category:"", type:"url", notes:"" };
+const emptyDoc = { title:"", url:"", file_url:"", file_name:"", category:"", type:"url", notes:"" };
+const FILE_TYPES = (tr) => [
+  { value:"url", label:tr.urlType },
+  { value:"screenshot", label:tr.screenshotType },
+  { value:"pdf", label:tr.pdfType },
+  { value:"docx", label:tr.docxType },
+  { value:"xlsx", label:tr.xlsxType },
+];
+const ACCEPT_MAP = { screenshot:"image/jpeg,image/png,image/gif,image/webp", pdf:"application/pdf", docx:".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document", xlsx:".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" };
 function ResourcesSection({ clientId, lang, tr }) {
   const [docs, setDocs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1038,6 +948,7 @@ function ResourcesSection({ clientId, lang, tr }) {
   const [editing, setEditing] = useState(null);
   const [filterCat, setFilterCat] = useState("all");
   const [search, setSearch] = useState("");
+  const [uploading, setUploading] = useState(false);
 
   const load = useCallback(async () => {
     const { data } = await supabase.from("client_resources").select("*").eq("client_id",clientId).order("created_at");
@@ -1045,10 +956,30 @@ function ResourcesSection({ clientId, lang, tr }) {
   },[clientId]);
   useEffect(()=>{ load(); },[load]);
 
+  const handleFileChange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const maxMB = 5;
+    if (file.size > maxMB * 1024 * 1024) {
+      alert(`El archivo supera ${maxMB}MB. Por favor selecciona un archivo más pequeño.`);
+      return;
+    }
+    setUploading(true);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      setForm(f => ({ ...f, file_url: dataUrl, file_name: file.name }));
+      setUploading(false);
+    };
+    reader.onerror = () => { alert("Error al leer el archivo."); setUploading(false); };
+    reader.readAsDataURL(file);
+  };
+
   const saveDoc = async () => {
-    if (!form.title.trim()||!form.url.trim()) return;
-    if (editing) { await supabase.from("client_resources").update({ ...form }).eq("id",editing); setDocs(prev=>prev.map(d=>d.id===editing?{ ...d,...form }:d)); }
-    else { const { data } = await supabase.from("client_resources").insert({ ...form, client_id:clientId }).select().single(); if (data) setDocs(prev=>[...prev,data]); }
+    if (!form.title.trim()) return;
+    const payload = { title:form.title, url:form.url, file_url:form.file_url, file_name:form.file_name, category:form.category, type:form.type, notes:form.notes };
+    if (editing) { await supabase.from("client_resources").update(payload).eq("id",editing); setDocs(prev=>prev.map(d=>d.id===editing?{ ...d,...payload }:d)); }
+    else { const { data } = await supabase.from("client_resources").insert({ ...payload, client_id:clientId }).select().single(); if (data) setDocs(prev=>[...prev,data]); }
     setModal(false);
   };
   const del = async (id) => { await supabase.from("client_resources").delete().eq("id",id); setDocs(prev=>prev.filter(d=>d.id!==id)); };
@@ -1081,14 +1012,23 @@ function ResourcesSection({ clientId, lang, tr }) {
                 onMouseEnter={e=>e.currentTarget.style.boxShadow="0 4px 16px rgba(0,0,0,0.07)"} onMouseLeave={e=>e.currentTarget.style.boxShadow="none"}
               >
                 <div style={{ display:"flex", alignItems:"flex-start", gap:10 }}>
-                  <div style={{ width:32, height:32, borderRadius:8, background:d.type==="screenshot"?"#f3eeff":"#eff6ff", display:"flex", alignItems:"center", justifyContent:"center", color:d.type==="screenshot"?"#7c3aed":"#2563eb", flexShrink:0 }}>
-                    {d.type==="screenshot"?icons.image(16):icons.link(16)}
+                  <div style={{ width:32, height:32, borderRadius:8, background:d.type==="screenshot"?"#f3eeff":d.type==="url"?"#eff6ff":"#f0fdf4", display:"flex", alignItems:"center", justifyContent:"center", color:d.type==="screenshot"?"#7c3aed":d.type==="url"?"#2563eb":"#16a34a", flexShrink:0 }}>
+                    {d.type==="screenshot"?icons.image(16):d.type==="url"?icons.link(16):icons.file(16)}
                   </div>
                   <div style={{ flex:1, minWidth:0 }}>
                     <div style={{ fontWeight:600, fontSize:13.5, color:"#1e293b", marginBottom:4, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{d.title}</div>
-                    <a href={d.url} target="_blank" rel="noopener noreferrer" style={{ display:"inline-flex", alignItems:"center", gap:4, color:"#2563eb", fontSize:12, textDecoration:"none", fontFamily:"'DM Mono',monospace" }}>
-                      {icons.external(11)} {d.url.length>38?d.url.slice(0,38)+"…":d.url}
-                    </a>
+                    {d.file_url && (
+                      d.type==="screenshot"
+                        ? <img src={d.file_url} alt={d.title} style={{ maxWidth:"100%", maxHeight:80, borderRadius:4, marginBottom:4, objectFit:"contain", display:"block" }} />
+                        : <a href={d.file_url} target="_blank" rel="noopener noreferrer" download={d.file_name||true} style={{ display:"inline-flex", alignItems:"center", gap:4, color:"#7c3aed", fontSize:12, textDecoration:"none", fontFamily:"'DM Mono',monospace", marginBottom:2 }}>
+                            {icons.file(11)} {d.file_name||"archivo"}
+                          </a>
+                    )}
+                    {d.url && (
+                      <a href={d.url} target="_blank" rel="noopener noreferrer" style={{ display:"inline-flex", alignItems:"center", gap:4, color:"#2563eb", fontSize:12, textDecoration:"none", fontFamily:"'DM Mono',monospace" }}>
+                        {icons.external(11)} {d.url.length>38?d.url.slice(0,38)+"…":d.url}
+                      </a>
+                    )}
                     {d.notes && <div style={{ color:"#94a3b8", fontSize:12, marginTop:4 }}>{d.notes}</div>}
                   </div>
                 </div>
@@ -1106,13 +1046,26 @@ function ResourcesSection({ clientId, lang, tr }) {
       {modal && (
         <Modal title={editing?tr.editResource:tr.newResource} onClose={()=>setModal(false)}>
           <Field label={tr.title}><input style={inp} placeholder={tr.resourceTitle} value={form.title} onChange={e=>setForm({ ...form, title:e.target.value })} /></Field>
-          <Field label={tr.url}><input style={inp} placeholder={tr.enterUrl} value={form.url} onChange={e=>setForm({ ...form, url:e.target.value })} /></Field>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
             <Field label={tr.category}><input style={inp} placeholder={tr.enterCategory} value={form.category} onChange={e=>setForm({ ...form, category:e.target.value })} /></Field>
-            <Field label={tr.type}><select style={sel} value={form.type} onChange={e=>setForm({ ...form, type:e.target.value })}><option value="url">{tr.urlType}</option><option value="screenshot">{tr.screenshotType}</option></select></Field>
+            <Field label={tr.type}><select style={sel} value={form.type} onChange={e=>setForm({ ...form, type:e.target.value, file_url:"" })}>
+              {FILE_TYPES(tr).map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+            </select></Field>
           </div>
+          <Field label={tr.referenceUrl}><input style={inp} placeholder={tr.enterUrl} value={form.url} onChange={e=>setForm({ ...form, url:e.target.value })} /></Field>
+          {form.type !== "url" && (
+            <Field label={tr.uploadFile}>
+              <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                <label style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 12px", border:"1.5px dashed #cbd5e1", borderRadius:8, cursor:"pointer", background:"#f8fafc", fontSize:13, color:"#64748b" }}>
+                  {uploading ? tr.uploadUploading : form.file_url ? <><span style={{ color:"#16a34a" }}>{icons.check(14)}</span> {form.file_name||tr.uploadPlaceholder}</> : <>{icons.upload(14)} {tr.uploadPlaceholder}</>}
+                  <input type="file" accept={ACCEPT_MAP[form.type]} style={{ display:"none" }} onChange={handleFileChange} disabled={uploading} />
+                </label>
+                {form.file_url && form.type==="screenshot" && <img src={form.file_url} alt="preview" style={{ maxWidth:"100%", maxHeight:120, borderRadius:6, marginTop:4, objectFit:"contain", border:"1px solid #e2e8f0" }} />}
+              </div>
+            </Field>
+          )}
           <Field label={tr.notes}><input style={inp} placeholder={tr.optionalNotes} value={form.notes} onChange={e=>setForm({ ...form, notes:e.target.value })} /></Field>
-          <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:8 }}><BtnGhost onClick={()=>setModal(false)}>{tr.cancel}</BtnGhost><BtnPrimary onClick={saveDoc}>{tr.save}</BtnPrimary></div>
+          <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:8 }}><BtnGhost onClick={()=>setModal(false)}>{tr.cancel}</BtnGhost><BtnPrimary onClick={saveDoc} disabled={uploading}>{tr.save}</BtnPrimary></div>
         </Modal>
       )}
     </div>
@@ -1322,11 +1275,111 @@ function ReportButton({ client, consultants, lang, tr }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MS LIST SYNC
+// ─────────────────────────────────────────────────────────────────────────────
+const MS_WEBHOOK_KEY = "joule_ms_webhook_url";
+
+function MsListSection({ clientId, clientName, lang, tr }) {
+  const [notes, setNotes] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [text, setText] = useState("");
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState(null);
+  const webhookUrl = (() => { try { return localStorage.getItem(MS_WEBHOOK_KEY)||""; } catch { return ""; } })();
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from("client_notes").select("*").eq("client_id", clientId).order("created_at", { ascending:false });
+    setNotes(data||[]); setLoading(false);
+  }, [clientId]);
+  useEffect(() => { load(); }, [load]);
+
+  const addNote = async () => {
+    if (!text.trim()) return;
+    const { data } = await supabase.from("client_notes").insert({ client_id:clientId, content:text.trim() }).select().single();
+    if (data) { setNotes(prev => [data, ...prev]); setText(""); }
+  };
+
+  const deleteNote = async (id) => {
+    if (!window.confirm(tr.msListDeleteConfirm)) return;
+    await supabase.from("client_notes").delete().eq("id", id);
+    setNotes(prev => prev.filter(n => n.id !== id));
+  };
+
+  const syncToMsList = async () => {
+    if (!webhookUrl) { setSyncMsg({ ok:false, msg:tr.msListNoWebhook }); return; }
+    setSyncing(true); setSyncMsg(null);
+    const payload = {
+      client_id: clientId,
+      client_name: clientName,
+      notes: notes.map(n => `[${new Date(n.created_at).toLocaleDateString()}] ${n.content}`).join("\n\n"),
+      last_updated: new Date().toISOString(),
+      total_notes: notes.length,
+    };
+    try {
+      const res = await fetch(webhookUrl, { method:"POST", headers:{ "Content-Type":"application/json" }, body:JSON.stringify(payload) });
+      setSyncMsg(res.ok ? { ok:true, msg:tr.msListSyncOk } : { ok:false, msg:tr.msListSyncError });
+    } catch { setSyncMsg({ ok:false, msg:tr.msListSyncError }); }
+    setSyncing(false);
+    setTimeout(() => setSyncMsg(null), 5000);
+  };
+
+  if (loading) return <Spinner />;
+  return (
+    <div>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
+        <h2 style={{ fontSize:17, fontWeight:800, color:"#0f172a", margin:0 }}>{tr.msListTitle}</h2>
+        <button onClick={syncToMsList} disabled={syncing||notes.length===0} style={{ display:"inline-flex", alignItems:"center", gap:8, padding:"9px 18px", borderRadius:10, border:"1.5px solid #0078d4", background:syncing||notes.length===0?"#f8fafc":"#0078d4", color:syncing||notes.length===0?"#94a3b8":"#fff", fontWeight:700, fontSize:13.5, cursor:syncing||notes.length===0?"not-allowed":"pointer", transition:"all 0.18s" }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          {syncing ? tr.msListSyncing : tr.msListSync}
+        </button>
+      </div>
+
+      {syncMsg && (
+        <div style={{ padding:"10px 16px", borderRadius:8, marginBottom:16, background:syncMsg.ok?"#f0fdf4":"#fff0f0", border:`1px solid ${syncMsg.ok?"#86efac":"#fca5a5"}`, color:syncMsg.ok?"#16a34a":"#dc2626", fontSize:13, fontWeight:600 }}>
+          {syncMsg.msg}
+        </div>
+      )}
+
+      {!webhookUrl && (
+        <div style={{ padding:"10px 16px", borderRadius:8, marginBottom:16, background:"#fefce8", border:"1px solid #fde68a", color:"#92400e", fontSize:13 }}>
+          ⚠ {tr.msListNoWebhook}
+        </div>
+      )}
+
+      <div style={{ background:"#fff", border:"1.5px solid #e2e8f0", borderRadius:12, padding:16, marginBottom:20 }}>
+        <div style={{ fontSize:12, fontWeight:700, color:"#64748b", textTransform:"uppercase", letterSpacing:"0.8px", marginBottom:10 }}>{tr.msListNotes}</div>
+        <textarea
+          style={{ ...inp, minHeight:90, resize:"vertical", fontFamily:"'DM Sans',sans-serif", lineHeight:1.5 }}
+          placeholder={tr.msListNotesPlaceholder}
+          value={text}
+          onChange={e=>setText(e.target.value)}
+          onKeyDown={e=>{ if(e.ctrlKey&&e.key==="Enter") addNote(); }}
+        />
+        <div style={{ display:"flex", justifyContent:"flex-end", marginTop:8 }}>
+          <BtnPrimary onClick={addNote} disabled={!text.trim()}>{icons.plus(13)} {tr.msListAddNote}</BtnPrimary>
+        </div>
+      </div>
+
+      <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+        {notes.length===0 && <div style={{ textAlign:"center", padding:"40px 0", color:"#94a3b8" }}>{tr.msListNoNotes}</div>}
+        {notes.map(n => (
+          <div key={n.id} style={{ background:"#fff", border:"1.5px solid #e2e8f0", borderRadius:10, padding:"12px 16px", position:"relative" }}>
+            <div style={{ fontSize:13.5, color:"#1e293b", lineHeight:1.6, whiteSpace:"pre-wrap", paddingRight:32 }}>{n.content}</div>
+            <div style={{ fontSize:11, color:"#94a3b8", marginTop:6 }}>{new Date(n.created_at).toLocaleString(lang==="es"?"es-CL":"en-US")}</div>
+            <button onClick={()=>deleteNote(n.id)} style={{ position:"absolute", top:10, right:10, background:"#fff0f0", border:"none", borderRadius:6, color:"#ef4444", cursor:"pointer", padding:"4px 6px", lineHeight:0 }}>{icons.trash(13)}</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // TABS
 // ─────────────────────────────────────────────────────────────────────────────
-const TABS = ["overview","checklist","tasks","resources","srs"];
-const TAB_LABELS = { es:{ overview:"Resumen",checklist:"Checklist",tasks:"Tareas",resources:"Recursos",srs:"SRs ServiceNow" }, en:{ overview:"Overview",checklist:"Checklist",tasks:"Tasks",resources:"Resources",srs:"SRs ServiceNow" } };
-const TAB_ICONS = { overview:"📊",checklist:"✅",tasks:"📋",resources:"🔗",srs:"🎫" };
+const TABS = ["overview","checklist","tasks","resources","srs","mslist"];
+const TAB_LABELS = { es:{ overview:"Resumen",checklist:"Checklist",tasks:"Tareas",resources:"Recursos",srs:"SRs ServiceNow",mslist:"Sincronizar MS List" }, en:{ overview:"Overview",checklist:"Checklist",tasks:"Tasks",resources:"Resources",srs:"SRs ServiceNow",mslist:"Sync MS List" } };
+const TAB_ICONS = { overview:"📊",checklist:"✅",tasks:"📋",resources:"🔗",srs:"🎫",mslist:"📋" };
 
 function DashboardView({ client, profile, tr, lang, setLang, onBack }) {
   const [tab, setTab] = useState("overview");
@@ -1367,6 +1420,7 @@ function DashboardView({ client, profile, tr, lang, setLang, onBack }) {
         {tab==="tasks"     && <TasksSection     clientId={client.id} lang={lang} tr={tr} />}
         {tab==="resources" && <ResourcesSection clientId={client.id} lang={lang} tr={tr} />}
         {tab==="srs"       && <ServiceRequestsSection clientId={client.id} lang={lang} tr={tr} />}
+        {tab==="mslist"    && <MsListSection    clientId={client.id} clientName={client.name} lang={lang} tr={tr} />}
       </div>
       <div style={{ textAlign:"center", padding:"24px 0 32px", color:"#cbd5e1", fontSize:12 }}>Joule × Ariba {tr.footerText} · {new Date().getFullYear()}</div>
     </div>
